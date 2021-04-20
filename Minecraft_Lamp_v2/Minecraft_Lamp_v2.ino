@@ -32,20 +32,22 @@ byte ledState = 0;
 
 const int btnPin = 5;
 byte lastBtnState = 1;
+int buttonHoldLoops = 0;
+int buttonHoldFlash = 0;
+const int delayBetweenHoldFlashes = 500;
 
 const int gyroscopeStartTimer = 1000;
 int gyroscopeTimer = 0;
 
-const int accelerometerHistory = 5;
-float accelerometerReadings[3][accelerometerHistory];
-float accelerometerDefault[] = {-0.02f, -1.02f, 0.02f};
-int accelerometerIndex = 0;
+const int bonkHistory = 10;
+float bonkReadings[bonkHistory];
+int bonkIndex = 0;
+int bonkTimer = 0;
+const float bonkTolerance = 2.0f;
+const float stillTolerance = 0.8f;
+
 const float tiltTolerance = 0.15f;
 byte tiltSwitch = 0;
-
-int bonkTimer = 0;
-const float bonkTolerance = 0.2f;
-const float stillTolerance = 0.05f;
 
 bool timing = false;
 
@@ -59,7 +61,7 @@ const String morseTable[] =
  "11111", "01111", "00111", "00011", "00001", "00000", "10000", "11000", "11100", "11110" };
 
 const int confirmationDelay = 100;
-const int globalDelay = 50;
+const int globalDelay = 20;
 
 void setup() {
   Serial.begin(9600);
@@ -143,7 +145,7 @@ void loop() {
       checkTimer();
       checkButton();
       checkGyroscope();
-      checkAccelerometer();
+      //checkAccelerometer();
       delay(globalDelay);
     }
 
@@ -155,34 +157,68 @@ void loop() {
   checkTimer();
   checkButton();
   checkGyroscope();
-  checkAccelerometer();
+  //checkAccelerometer();
   delay(globalDelay);
 }
 
-bool checkButton() {
-  byte curBtnState = digitalRead(btnPin);
-  bool result = curBtnState == LOW && lastBtnState == HIGH;
-  lastBtnState = curBtnState;
-  if (result) {
+bool isButtonPressed() {
+  return !digitalRead(btnPin);
+}
+void checkButton() {
+  byte buttonPressed = isButtonPressed();
+  if (buttonPressed) {
+    ++buttonHoldLoops;
+    if(buttonHoldLoops * globalDelay >= 2000) {
+      if(buttonHoldFlash <= 0) {
+        confirmationFlash(0);
+        buttonHoldFlash = delayBetweenHoldFlashes;
+      }
+      buttonHoldFlash -= globalDelay;
+    }
+  } else {
+    if (buttonHoldLoops * globalDelay >= 2000) {
+      //resetFunc();
+    }
+    buttonHoldLoops = 0;
+  }
+  
+  bool pressed = buttonPressed && !lastBtnState;
+  if (pressed) {
     toggleLED();
     gyroscopeTimer = gyroscopeStartTimer;
   }
-  return result;
+  lastBtnState = buttonPressed;
 }
 
 void checkGyroscope() {
-  float x, y, z;
   if (IMU.gyroscopeAvailable()) {
+    float x, y, z;
     IMU.readGyroscope(x, y, z); // Y is spin
-    if(sqrt(x * x + y * y + z * z) > gyroscopeCharacteristic.value()) {
-      if (gyroscopeTimer <= 0) {
-        toggleLED();
+    printXYZ(x, y, z);
+    
+    bonkReadings[bonkIndex] = abs(x) + abs(y) + abs(z);
+
+    if(bonkTimer > 0) {
+      --bonkTimer;
+    } else {
+      // Look backward through the gyroscope history to see if
+      // there was one frame where the readings peaked, and then if 
+      // they returned to the current level
+      bool stable, bonk;
+      for (int i = 0; i < bonkHistory; i++) {
+        int index = (bonkIndex + bonkHistory - i) % bonkHistory;
+        stable = bonkReadings[index] <= stillTolerance;
+        bonk = bonk || bonkReadings[index] >= bonkTolerance; // Stays true once triggered
+        if ((i == 0 && !stable) || (i > 0 && stable && !bonk)) {
+          break;
+        } else if (stable && bonk) {
+          toggleLED();
+          bonkTimer = bonkHistory;
+          break;
+        }
       }
-      gyroscopeTimer = gyroscopeStartTimer;
     }
-  }
-  if(gyroscopeTimer > 0) {
-    gyroscopeTimer -= globalDelay;
+    bonkIndex = (bonkIndex + 1) % bonkHistory;
   }
 }
 
@@ -191,49 +227,7 @@ void checkAccelerometer() {
 
     float x, y, z;
     IMU.readAcceleration(x, y, z);
-    printXYZ(x, y, z);
-    accelerometerReadings[0][accelerometerIndex] = x; 
-    accelerometerReadings[1][accelerometerIndex] = y;
-    accelerometerReadings[2][accelerometerIndex] = z;
 
-    if(bonkTimer > 0) {
-      --bonkTimer;
-    } else {
-      // Look backward through the accelerometer history to see if
-      // there was one frame where the acceleration peaked, and then if 
-      // it returned to the current level
-      bool stable, bonk;
-      for (int i = 0; i < accelerometerHistory; i++) {
-        int index = (accelerometerIndex + accelerometerHistory - i) % accelerometerHistory;
-        float totalDiff = abs(accelerometerDefault[0] - accelerometerReadings[0][index]) +
-                          abs(accelerometerDefault[1] - accelerometerReadings[1][index]) +
-                          abs(accelerometerDefault[2] - accelerometerReadings[2][index]);
-        stable = totalDiff <= stillTolerance;
-        bonk = bonk || totalDiff >= bonkTolerance; // Stays true once triggered
-        if ((i == 0 && !stable) || (i > 0 && stable && !bonk)) {
-          break;
-        } else if (stable && bonk) {
-          toggleLED();
-          bonkTimer = accelerometerHistory;
-          break;
-        }
-      }
-    }
-    accelerometerIndex = (accelerometerIndex + 1) % accelerometerHistory;
-
-    /*
-    // y is forward/back, z is left/right
-    // y starts at -1,     z starts at 0
-    if(x < -tiltTolerance || x > tiltTolerance ||
-       z < -tiltTolerance || z > tiltTolerance) {
-      if(tiltSwitch == 0) {
-        toggleLED();
-        tiltSwitch = 1;
-      }
-    } else {
-      tiltSwitch = 0;
-    }
-    */
   }
 }
 
@@ -274,14 +268,14 @@ void morseCode(String str) {
       toggleLED();
       delay(morseDelay);
 
-      if (checkButton()) { // Abort if the button is pressed
+      if (isButtonPressed()) { // Abort if the button is pressed
         return;
       }
     }
 
     delay(morseDelay * 2); // Delay 3 between letters (including the delay from the for loop)
     
-    if (checkButton()) { // Abort if the button is pressed
+    if (isButtonPressed()) { // Abort if the button is pressed
       return;
     }
   }
@@ -300,7 +294,7 @@ void toggleLED() {
 }
 
 void confirmationFlash(int desiredState) {
-  // Base: 3 cycles, 6 loops
+  // 3 cycles, 6 loops
   //         Cur on  Cur off
   // New on    6       5
   // New off   5       6
