@@ -1,36 +1,17 @@
-// Arduino_LSM6DS3 - Version: Latest 
 #include <Arduino_LSM9DS1.h>
-
-/*
-  LED
-
-  This example creates a BLE peripheral with service that contains a
-  characteristic to control an LED.
-
-  The circuit:
-  - Arduino MKR WiFi 1010, Arduino Uno WiFi Rev2 board, Arduino Nano 33 IoT,
-    Arduino Nano 33 BLE, or Arduino Nano 33 BLE Sense board.
-
-  You can use a generic BLE central app, like LightBlue (iOS and Android) or
-  nRF Connect (Android), to interact with the services and characteristics
-  created in this sketch.
-
-  This example code is in the public domain.
-*/
-
 #include <ArduinoBLE.h>
 
 BLEService ledService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Service
 
-BLEByteCharacteristic switchCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
+BLEByteCharacteristic toggleCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLEWrite);
 BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLENotify | BLEWrite);
 BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
 
-const int ledPin = 3; // pin to use for the LED
+const int ledPin = 3;
 byte ledState = 0;
 
-const int btnPin = 5;
-byte lastBtnState = 1;
+const int buttonPin = 5;
+byte lastButtonState = 1;
 int buttonHoldLoops = 0;
 int buttonHoldFlash = 0;
 const int delayBetweenHoldFlashes = 500;
@@ -41,7 +22,7 @@ int gyroscopeTimer = 0;
 int bonkLoops = 0;
 const int maxBonkLoops = 10;
 int bonkTimer = 0;
-const float bonkTolerance = 2.0f;
+const float bonkTolerance = 5.0f;
 
 bool timing = false;
 
@@ -61,11 +42,10 @@ void setup() {
   Serial.begin(9600);
   //while (!Serial);
 
-  // set LED pin to output mode
   pinMode(ledPin, OUTPUT);
-  pinMode(btnPin, INPUT_PULLUP);
+  pinMode(buttonPin, INPUT_PULLUP);
 
-  // begin initialization
+  // Bluetooth initialization
   if (!BLE.begin()) {
     Serial.println("Starting BLE failed!");
     errorLoop();
@@ -76,7 +56,7 @@ void setup() {
   BLE.setAdvertisedService(ledService);
 
   // add the characteristics to the service
-  ledService.addCharacteristic(switchCharacteristic);
+  ledService.addCharacteristic(toggleCharacteristic);
   ledService.addCharacteristic(timerCharacteristic);
   ledService.addCharacteristic(morseCharacteristic);
 
@@ -84,15 +64,16 @@ void setup() {
   BLE.addService(ledService);
 
   // set the initial value for the characeristic:
-  //switchCharacteristic.writeValue(0);
+  //toggleCharacteristic.writeValue(0);
   //timerCharacteristic.writeValue(0);
   //morseCharacteristic.writeValue("");
 
   // start advertising
   BLE.advertise();
 
-  Serial.println("BLE LED Peripheral");
-  
+  Serial.println("Bluetooth device active, waiting for connections...");
+
+  // IMU initialization
   if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
     errorLoop();
@@ -107,52 +88,15 @@ void errorLoop() {
 }
 
 void loop() {
-  // listen for BLE peripherals to connect:
-  BLEDevice central = BLE.central();
-
-  // if a central is connected to peripheral:
-  if (central) {
-    Serial.print("Connected to central: ");
-    // print the central's MAC address:
-    Serial.println(central.address());
-
-    // while the central is still connected to peripheral:
-    while (central.connected()) {
-      // if the remote device wrote to the characteristic,
-      // use the value to control the LED:
-      if (switchCharacteristic.written()) {
-        toggleLED();
-      }
-
-      if (timerCharacteristic.written()) {
-        timerCharacteristic.writeValue(timerCharacteristic.value() * 1000 * 60);
-        confirmationFlash(1);
-        timing = true;
-      }
-
-      if (morseCharacteristic.written()) {
-        morseCode(morseCharacteristic.value());
-      }
-
-      checkTimer();
-      checkButton();
-      checkGyroscope();
-      delay(globalDelay);
-    }
-
-    // when the central disconnects, print it out:
-    Serial.print(F("Disconnected from central: "));
-    Serial.println(central.address());
-  }
-
   checkTimer();
   checkButton();
   checkGyroscope();
+  checkBluetooth();
   delay(globalDelay);
 }
 
 bool isButtonPressed() {
-  return !digitalRead(btnPin);
+  return !digitalRead(buttonPin);
 }
 void checkButton() {
   byte buttonPressed = isButtonPressed();
@@ -172,12 +116,12 @@ void checkButton() {
     buttonHoldLoops = 0;
   }
   
-  bool pressed = buttonPressed && !lastBtnState;
+  bool pressed = buttonPressed && !lastButtonState;
   if (pressed) {
     toggleLED();
     gyroscopeTimer = gyroscopeStartTimer;
   }
-  lastBtnState = buttonPressed;
+  lastButtonState = buttonPressed;
 }
 
 void checkGyroscope() {
@@ -195,7 +139,7 @@ void checkGyroscope() {
       if (totalDiff > bonkTolerance) {
         ++bonkLoops;
       } else {
-        if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
+        if(bonkLoops > 1 && bonkLoops < maxBonkLoops) {
           toggleLED();
           bonkTimer = maxBonkLoops;
         }
@@ -261,10 +205,28 @@ void morseCode(String str) {
   }
 }
 
+void checkBluetooth() {
+  // Poll for BLE events
+  BLE.poll();
+
+  if (toggleCharacteristic.written()) {
+    toggleLED();
+  }
+
+  if (timerCharacteristic.written()) {
+    timerCharacteristic.writeValue(timerCharacteristic.value() * 1000 * 60);
+    confirmationFlash(1);
+    timing = true;
+  }
+
+  if (morseCharacteristic.written()) {
+    morseCode(morseCharacteristic.value());
+  }
+}
+
 void toggleLED() {
   ledState = 1 - ledState;
   digitalWrite(ledPin, ledState); // toggle the LED
-  switchCharacteristic.writeValue(ledState);
   timing = false;
 }
 
