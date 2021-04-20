@@ -25,7 +25,6 @@ BLEService ledService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Servic
 BLEByteCharacteristic switchCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
 BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLENotify | BLEWrite);
 BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
-BLEUnsignedIntCharacteristic gyroscopeCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
 
 const int ledPin = 3; // pin to use for the LED
 byte ledState = 0;
@@ -39,15 +38,10 @@ const int delayBetweenHoldFlashes = 500;
 const int gyroscopeStartTimer = 1000;
 int gyroscopeTimer = 0;
 
-const int bonkHistory = 10;
-float bonkReadings[bonkHistory];
-int bonkIndex = 0;
+int bonkLoops = 0;
+const int maxBonkLoops = 10;
 int bonkTimer = 0;
 const float bonkTolerance = 2.0f;
-const float stillTolerance = 0.8f;
-
-const float tiltTolerance = 0.15f;
-byte tiltSwitch = 0;
 
 bool timing = false;
 
@@ -85,7 +79,6 @@ void setup() {
   ledService.addCharacteristic(switchCharacteristic);
   ledService.addCharacteristic(timerCharacteristic);
   ledService.addCharacteristic(morseCharacteristic);
-  ledService.addCharacteristic(gyroscopeCharacteristic);
 
   // add service
   BLE.addService(ledService);
@@ -94,7 +87,6 @@ void setup() {
   //switchCharacteristic.writeValue(0);
   //timerCharacteristic.writeValue(0);
   //morseCharacteristic.writeValue("");
-  gyroscopeCharacteristic.writeValue(2000);
 
   // start advertising
   BLE.advertise();
@@ -109,8 +101,8 @@ void setup() {
 
 void errorLoop() {
   while (1) {
-    toggleLED();
-    delay(500);
+    confirmationFlash(0);
+    delay(delayBetweenHoldFlashes);
   }
 }
 
@@ -145,7 +137,6 @@ void loop() {
       checkTimer();
       checkButton();
       checkGyroscope();
-      //checkAccelerometer();
       delay(globalDelay);
     }
 
@@ -157,7 +148,6 @@ void loop() {
   checkTimer();
   checkButton();
   checkGyroscope();
-  //checkAccelerometer();
   delay(globalDelay);
 }
 
@@ -193,41 +183,26 @@ void checkButton() {
 void checkGyroscope() {
   if (IMU.gyroscopeAvailable()) {
     float x, y, z;
-    IMU.readGyroscope(x, y, z); // Y is spin
-    printXYZ(x, y, z);
-    
-    bonkReadings[bonkIndex] = abs(x) + abs(y) + abs(z);
+    IMU.readGyroscope(x, y, z);
+    //printXYZ(x, y, z);
 
+    // Bonking
+    float totalDiff = abs(x) /*+ abs(y)*/ + abs(z);
+    //printXYZ(x, y, z);
     if(bonkTimer > 0) {
       --bonkTimer;
     } else {
-      // Look backward through the gyroscope history to see if
-      // there was one frame where the readings peaked, and then if 
-      // they returned to the current level
-      bool stable, bonk;
-      for (int i = 0; i < bonkHistory; i++) {
-        int index = (bonkIndex + bonkHistory - i) % bonkHistory;
-        stable = bonkReadings[index] <= stillTolerance;
-        bonk = bonk || bonkReadings[index] >= bonkTolerance; // Stays true once triggered
-        if ((i == 0 && !stable) || (i > 0 && stable && !bonk)) {
-          break;
-        } else if (stable && bonk) {
+      if (totalDiff > bonkTolerance) {
+        ++bonkLoops;
+      } else {
+        if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
           toggleLED();
-          bonkTimer = bonkHistory;
-          break;
+          bonkTimer = maxBonkLoops;
         }
+        bonkLoops = 0;
       }
     }
-    bonkIndex = (bonkIndex + 1) % bonkHistory;
-  }
-}
-
-void checkAccelerometer() {
-  if (IMU.accelerationAvailable()) {
-
-    float x, y, z;
-    IMU.readAcceleration(x, y, z);
-
+    
   }
 }
 
