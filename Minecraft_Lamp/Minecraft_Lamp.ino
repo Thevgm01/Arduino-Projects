@@ -36,7 +36,15 @@ const String morseTable[] =
  "11111", "01111", "00111", "00011", "00001", "00000", "10000", "11000", "11100", "11110" };
 
 const int confirmationDelay = 100;
-const int globalDelay = 20;
+
+const unsigned long buttonPollInterval = 50;
+const unsigned long gyroscopePollInterval = 20;
+const unsigned long timerPollInterval = 1000;
+const unsigned long bluetoothPollInterval = 200;
+unsigned long buttonPollStart = 0;
+unsigned long gyroscopePollStart = 0;
+unsigned long timerPollStart = 0;
+unsigned long bluetoothPollStart = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -88,11 +96,18 @@ void errorLoop() {
 }
 
 void loop() {
-  checkTimer();
-  checkButton();
-  checkGyroscope();
-  checkBluetooth();
-  delay(globalDelay);
+  if (awaitPoll(timerPollStart, timerPollInterval)) {
+    checkTimer();
+  }
+  if (awaitPoll(buttonPollStart, buttonPollInterval)) {
+    checkButton();
+  }
+  if (awaitPoll(gyroscopePollStart, gyroscopePollInterval)) {
+    checkGyroscope();
+  }
+  if (awaitPoll(bluetoothPollStart, bluetoothPollInterval)) {
+    checkBluetooth();
+  }
 }
 
 bool isButtonPressed() {
@@ -102,15 +117,15 @@ void checkButton() {
   byte buttonPressed = isButtonPressed();
   if (buttonPressed) {
     ++buttonHoldLoops;
-    if(buttonHoldLoops * globalDelay >= 2000) {
+    if(buttonHoldLoops * buttonPollInterval >= 2000) {
       if(buttonHoldFlash <= 0) {
         confirmationFlash(0);
         buttonHoldFlash = delayBetweenHoldFlashes;
       }
-      buttonHoldFlash -= globalDelay;
+      buttonHoldFlash -= buttonPollInterval;
     }
   } else {
-    if (buttonHoldLoops * globalDelay >= 2000) {
+    if (buttonHoldLoops * buttonPollInterval >= 2000) {
       //resetFunc();
     }
     buttonHoldLoops = 0;
@@ -122,6 +137,7 @@ void checkButton() {
     gyroscopeTimer = gyroscopeStartTimer;
   }
   lastButtonState = buttonPressed;
+
 }
 
 void checkGyroscope() {
@@ -154,7 +170,7 @@ void checkTimer() {
   if (timerCharacteristic.value() == 0) {
     return;
   }
-  timerCharacteristic.writeValue(timerCharacteristic.value() - globalDelay);
+  timerCharacteristic.writeValue(timerCharacteristic.value() - timerPollInterval);
   if(timerCharacteristic.value() == 0) {
     toggleLED();
   }
@@ -239,6 +255,15 @@ void confirmationFlash(int desiredState) {
   for (int i = 0; i < 6 - abs(startState - desiredState); ++i) {
     toggleLED();
     delay(confirmationDelay);
+  }
+}
+
+bool awaitPoll(unsigned long & timer, unsigned long interval) {
+  if (millis() - timer < interval) {
+    return false;
+  } else {
+    timer = millis();
+    return true;
   }
 }
 
