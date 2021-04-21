@@ -16,13 +16,12 @@ int buttonHoldLoops = 0;
 int buttonHoldFlash = 0;
 const int delayBetweenHoldFlashes = 500;
 
-const int gyroscopeStartTimer = 1000;
-int gyroscopeTimer = 0;
-
-int bonkLoops = 0;
+// Gyroscope
 const int maxBonkLoops = 10;
-int bonkTimer = 0;
 const float bonkTolerance = 5.0f;
+int bonkLoops = 0;
+int bonkTimer = 0;
+float lastGyroscopeX, lastGyroscopeY, lastGyroscopeZ;
 
 bool timing = false;
 
@@ -41,10 +40,10 @@ const unsigned long buttonPollInterval = 50;
 const unsigned long gyroscopePollInterval = 20;
 const unsigned long timerPollInterval = 1000;
 const unsigned long bluetoothPollInterval = 200;
-unsigned long buttonPollStart = 0;
-unsigned long gyroscopePollStart = 0;
-unsigned long timerPollStart = 0;
-unsigned long bluetoothPollStart = 0;
+unsigned long buttonPollStart = 3;
+unsigned long gyroscopePollStart = 7;
+unsigned long timerPollStart = 11;
+unsigned long bluetoothPollStart = 17;
 
 void setup() {
   Serial.begin(9600);
@@ -68,15 +67,15 @@ void setup() {
   ledService.addCharacteristic(timerCharacteristic);
   ledService.addCharacteristic(morseCharacteristic);
 
-  // add service
+  // Add service
   BLE.addService(ledService);
 
-  // set the initial value for the characeristic:
+  // Set the initial value for the characeristic:
   //toggleCharacteristic.writeValue(0);
   //timerCharacteristic.writeValue(0);
   //morseCharacteristic.writeValue("");
 
-  // start advertising
+  // Start advertising
   BLE.advertise();
 
   Serial.println("Bluetooth device active, waiting for connections...");
@@ -96,18 +95,11 @@ void errorLoop() {
 }
 
 void loop() {
-  if (awaitPoll(timerPollStart, timerPollInterval)) {
-    checkTimer();
-  }
-  if (awaitPoll(buttonPollStart, buttonPollInterval)) {
-    checkButton();
-  }
-  if (awaitPoll(gyroscopePollStart, gyroscopePollInterval)) {
-    checkGyroscope();
-  }
-  if (awaitPoll(bluetoothPollStart, bluetoothPollInterval)) {
-    checkBluetooth();
-  }
+  unsigned long curMillis = millis();
+  awaitPoll(timerPollStart, timerPollInterval, curMillis, &checkTimer);
+  awaitPoll(buttonPollStart, buttonPollInterval, curMillis, &checkButton);
+  awaitPoll(gyroscopePollStart, gyroscopePollInterval, curMillis, &checkGyroscope);
+  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
 }
 
 bool isButtonPressed() {
@@ -134,28 +126,59 @@ void checkButton() {
   bool pressed = buttonPressed && !lastButtonState;
   if (pressed) {
     toggleLED();
-    gyroscopeTimer = gyroscopeStartTimer;
+    // gyroscopeTimer = gyroscopeStartTimer;
   }
   lastButtonState = buttonPressed;
 
 }
 
+//int a = 0;
+//float total[3];
+
 void checkGyroscope() {
   if (IMU.gyroscopeAvailable()) {
     float x, y, z;
     IMU.readGyroscope(x, y, z);
+
+    // Take the absolute values
+    x = abs(x);
+    y = abs(y);
+    z = abs(z);
+    
+    // Filter out random spikes
+    // These spikes seem to happen randomly while at rest, to all axes, and the value is always near 15.5
+    if (lastGyroscopeX < bonkTolerance && x >= 15.25f && x <= 15.75f) x = 0.0f;
+    if (lastGyroscopeY < bonkTolerance && y >= 15.25f && y <= 15.75f) y = 0.0f;
+    if (lastGyroscopeZ < bonkTolerance && z >= 15.25f && z <= 15.75f) z = 0.0f;
+
+    lastGyroscopeX = x;
+    lastGyroscopeY = y;
+    lastGyroscopeZ = z;
+
     //printXYZ(x, y, z);
 
+    /*
+    total[a] = x + y + z;
+    Serial.print(total[a]);
+    Serial.print("\t");
+    a = (a + 1) % 3;
+
+    float totalDiff = 0.0f;
+    for(int i = 0; i < 3; ++i) {
+      totalDiff += total[i];
+    }
+    totalDiff /= 3.0f;
+    Serial.println(totalDiff);
+    */
+    
     // Bonking
-    float totalDiff = abs(x) /*+ abs(y)*/ + abs(z);
-    //printXYZ(x, y, z);
     if(bonkTimer > 0) {
       --bonkTimer;
     } else {
-      if (totalDiff > bonkTolerance) {
+      if (x + y + z > bonkTolerance) {
         ++bonkLoops;
       } else {
-        if(bonkLoops > 1 && bonkLoops < maxBonkLoops) {
+        if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
           toggleLED();
           bonkTimer = maxBonkLoops;
         }
@@ -243,6 +266,7 @@ void checkBluetooth() {
 void toggleLED() {
   ledState = 1 - ledState;
   digitalWrite(ledPin, ledState); // toggle the LED
+  digitalWrite(LED_BUILTIN, ledState);
   timing = false;
 }
 
@@ -258,12 +282,10 @@ void confirmationFlash(int desiredState) {
   }
 }
 
-bool awaitPoll(unsigned long & timer, unsigned long interval) {
-  if (millis() - timer < interval) {
-    return false;
-  } else {
-    timer = millis();
-    return true;
+void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curMillis, void (*function)()) {
+  if (curMillis - timer >= interval) {
+    function();
+    timer = curMillis;
   }
 }
 
