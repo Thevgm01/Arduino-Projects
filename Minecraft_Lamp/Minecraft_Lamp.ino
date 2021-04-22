@@ -37,13 +37,15 @@ const String morseTable[] =
 const int confirmationDelay = 100;
 
 const unsigned long buttonPollInterval = 50;
-const unsigned long gyroscopePollInterval = 20;
+const unsigned long accelerometerPollInterval = 30;
+const unsigned long gyroscopePollInterval = 30;
 const unsigned long timerPollInterval = 1000;
 const unsigned long bluetoothPollInterval = 200;
-unsigned long buttonPollStart = 3;
-unsigned long gyroscopePollStart = 7;
-unsigned long timerPollStart = 11;
-unsigned long bluetoothPollStart = 17;
+unsigned long buttonPollStart = 7;
+unsigned long accelerometerPollStart = 11;
+unsigned long gyroscopePollStart = 13;
+unsigned long timerPollStart = 17;
+unsigned long bluetoothPollStart = 19;
 
 void setup() {
   Serial.begin(9600);
@@ -96,15 +98,17 @@ void errorLoop() {
 
 void loop() {
   unsigned long curMillis = millis();
-  awaitPoll(timerPollStart, timerPollInterval, curMillis, &checkTimer);
-  awaitPoll(buttonPollStart, buttonPollInterval, curMillis, &checkButton);
-  awaitPoll(gyroscopePollStart, gyroscopePollInterval, curMillis, &checkGyroscope);
-  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
+  awaitPoll(buttonPollStart,        buttonPollInterval,        curMillis, &checkButton);
+  //awaitPoll(accelerometerPollStart, accelerometerPollInterval, curMillis, &checkAccelerometer);
+  awaitPoll(gyroscopePollStart,     gyroscopePollInterval,     curMillis, &checkGyroscope);
+  awaitPoll(timerPollStart,         timerPollInterval,         curMillis, &checkTimer);
+  awaitPoll(bluetoothPollStart,     bluetoothPollInterval,     curMillis, &checkBluetooth);
 }
 
 bool isButtonPressed() {
   return !digitalRead(buttonPin);
 }
+
 void checkButton() {
   byte buttonPressed = isButtonPressed();
   if (buttonPressed) {
@@ -134,6 +138,17 @@ void checkButton() {
 
 //int a = 0;
 //float total[3];
+
+void checkAccelerometer() {
+  if (IMU.gyroscopeAvailable()) {
+    float x, y, z;
+    IMU.readAcceleration(x, y, z);
+    printXYZ(x, y, z);
+    float base = -5;
+    float frac = exp(base - base * z) * (-z + 2);
+    analogWrite(ledPin, frac * 255);
+  }
+}
 
 void checkGyroscope() {
   if (IMU.gyroscopeAvailable()) {
@@ -265,7 +280,7 @@ void checkBluetooth() {
 
 void toggleLED() {
   ledState = 1 - ledState;
-  digitalWrite(ledPin, ledState); // toggle the LED
+  analogWrite(ledPin, ledState * 255); // toggle the LED
   digitalWrite(LED_BUILTIN, ledState);
   timing = false;
 }
