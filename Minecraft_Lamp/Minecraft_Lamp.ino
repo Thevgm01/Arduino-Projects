@@ -18,15 +18,17 @@ const int delayBetweenHoldFlashes = 500;
 
 // Bonking
 const int maxBonkLoops = 10;
-const float bonkTolerance = 5.0f;
+const float bonkTolerance = 2.0f;
 int bonkLoops = 0;
-int bonkTimer = 0;
+int bonkFreeze = 0;
 float lastGyroscopeX, lastGyroscopeY, lastGyroscopeZ;
 
 // Tilting
-const float tiltThreshold = 0.05f;
+const float tiltThreshold = 0.1f;
+float lastLightFrac = 0.0f;
 
-bool timing = false;
+const unsigned long timerMillis = 1 * 60 * 1000;
+unsigned long timer = 0;
 
 const int morseDelay = 100;
 const String morseTable[] = 
@@ -136,18 +138,17 @@ void checkButton() {
 
 }
 
-const int IMUHistoryLength = 3;
-int IMUHistoryIndex = 0;
-float yAccelHistory[IMUHistoryLength];
-float gyroDiffHistory[IMUHistoryLength];
+const int accelerometerHistoryLength = 5;
+int accelerometerHistoryIndex = 0;
+float yAccelerationHistory[accelerometerHistoryLength];
 
 void checkIMU() {
   float ax, ay, az, gx, gy, gz;
-  IMUHistoryIndex = (IMUHistoryIndex + 1) % IMUHistoryLength;
+  accelerometerHistoryIndex = (accelerometerHistoryIndex + 1) % accelerometerHistoryLength;
   
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
-    yAccelHistory[IMUHistoryIndex] = ay;
+    yAccelerationHistory[accelerometerHistoryIndex] = ay;
     //printXYZ(ax, ay, az);
   }
 
@@ -156,33 +157,48 @@ void checkIMU() {
     //printXYZ(gx, gy, gz);
   }
 
-  float tilt = 0;
-  for (int i = 0; i < IMUHistoryLength; ++i) {
-    tilt += yAccelHistory[i];
-  }
-  tilt /= IMUHistoryLength;
-  tilt = 1 + tilt;
-  Serial.print(tilt);
-  
-  //Serial.println(tilt);
-  if (tilt > tiltThreshold) {
-    if (tilt >= 1 - tiltThreshold) {
-      confirmationFlash(1);
-      timing = true;
-    } else {
-      float base = -5;
-      float frac = exp(base - base * tilt) * (-tilt + 2);
-      analogWrite(ledPin, frac * 255);
+  // Get the lowest of recent accelerometer y values to cancel out bonking fluctuations
+  /*float tilt = 999;
+  for (int i = 0; i < accelerometerHistoryLength; ++i) {
+    if (yAccelerationHistory[i] + 100 < tilt) {
+      tilt = yAccelerationHistory[i] + 100;
     }
   }
-  
+  tilt = tilt + 1 - 100;*/
+
+  float tilt = 0;
+  for (int i = 0; i < accelerometerHistoryLength; ++i) {
+    tilt += yAccelerationHistory[i];
+  }
+  tilt /= (float)accelerometerHistoryLength;
+  tilt = tilt + 1;
+  Serial.print(tilt);
+  Serial.print("\t");
+
+  // Handle tilting to activate the timer
+  if (tilt >= tiltThreshold) {
+    if (tilt >= 0.975f) {
+      confirmationFlash(1);
+      timer = millis() + timerMillis;
+    } else {
+      //float base = -5;
+      //float frac = exp(base - base * tilt) * (-tilt + 2);
+      float frac = lightFunc(tilt) - 0.025f; // To start at 0 when including the tilt
+      if (timer == 0 || frac > lastLightFrac) {
+        analogWrite(ledPin, frac * 255);
+        lastLightFrac = frac;
+      }
+    }
+  }
+
+  // Handle bonking
   else {
     // Take the absolute values
     float x = abs(gx);
     float y = abs(gy);
     float z = abs(gz);
     
-    // Filter out random spikes
+    // Filter out data spikes
     // These spikes seem to happen randomly while at rest, to all axes, and the value is always near 15.5
     if (lastGyroscopeX < bonkTolerance && x >= 15.25f && x <= 15.75f) x = 0.0f;
     if (lastGyroscopeY < bonkTolerance && y >= 15.25f && y <= 15.75f) y = 0.0f;
@@ -193,42 +209,46 @@ void checkIMU() {
     lastGyroscopeZ = z;
 
     //printXYZ(x, y, z);
-    gyroDiffHistory[IMUHistoryIndex] = x + y + z;
-
-    float diff = 0;
-    for (int i = 0; i < IMUHistoryLength; ++i) {
-      diff += gyroDiffHistory[i];
-    }
-    diff /= IMUHistoryLength;
-    Serial.print("\t");
-    Serial.println(diff);
+    float diff = x + /*y +*/ z;
+    Serial.print(diff);
     
     // Bonking
-    if(bonkTimer > 0) {
-      --bonkTimer;
+    if(bonkFreeze > 0) {
+      --bonkFreeze;
     } else {
       if (diff > bonkTolerance) {
         ++bonkLoops;
       } else {
         if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
           toggleLED();
-          bonkTimer = maxBonkLoops;
+          bonkFreeze = maxBonkLoops;
         }
         bonkLoops = 0;
       }
     }
     
   }
+
+  Serial.println();
 }
 
 void checkTimer() {
-  if (timerCharacteristic.value() == 0) {
-    return;
+  if (timer > 0) {
+    if (timer - millis() > 0) { // Still timing
+      float frac = lightFunc((timer - millis()) / timerMillis);
+      analogWrite(ledPin, frac);
+      lastLightFrac = frac;
+    } else {
+      toggleLED();
+    }
   }
-  timerCharacteristic.writeValue(timerCharacteristic.value() - timerPollInterval);
-  if(timerCharacteristic.value() == 0) {
-    toggleLED();
-  }
+}
+
+float lightFunc(float x) {
+  // All these values are hard-coded to feel good, check this graph for details
+  // The graph needs to start at (0.1, 0) and end at (1, 1)
+  // https://www.desmos.com/calculator/5awgefuwza
+  return (2 * tan(0.45f * PI * x) / PI) * 0.25f;
 }
 
 void morseCode(String str) {
@@ -285,9 +305,8 @@ void checkBluetooth() {
   }
 
   if (timerCharacteristic.written()) {
-    timerCharacteristic.writeValue(timerCharacteristic.value() * 1000 * 60);
     confirmationFlash(1);
-    timing = true;
+    timer = millis() + (long)timerCharacteristic.value() * 60 * 1000;
   }
 
   if (morseCharacteristic.written()) {
@@ -299,7 +318,7 @@ void toggleLED() {
   ledState = 1 - ledState;
   analogWrite(ledPin, ledState * 255); // toggle the LED
   digitalWrite(LED_BUILTIN, ledState);
-  timing = false;
+  timer = 0;
 }
 
 void confirmationFlash(int desiredState) {
