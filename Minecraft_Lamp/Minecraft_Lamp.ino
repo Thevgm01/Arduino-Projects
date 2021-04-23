@@ -9,7 +9,9 @@ BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A121
 
 const int ledPin = 3;
 int ledState = 0;
+const int confirmationDelay = 100;
 
+// Button presses
 const int buttonPin = 5;
 byte lastButtonState = 1;
 int buttonHoldLoops = 0;
@@ -32,9 +34,12 @@ const int tiltHistoryLength = 8;
 int tiltHistoryIndex = 0;
 float yAccelerationHistory[tiltHistoryLength];
 
-const unsigned long timerMillis = 15 * 60 * 1000;
+// Timing
+const unsigned long defaultTimerMillis = 15 * 60 * 1000;
+unsigned long timerMillis = defaultTimerMillis;
 unsigned long timer = 0;
 
+// Morse code
 const int morseDelay = 100;
 const String morseTable[] = 
 //A     B       C       D      E    F       G      H       I     J       K      L       M
@@ -44,8 +49,7 @@ const String morseTable[] =
 //0,       1        2        3        4        5        6        7        8        9
  "11111", "01111", "00111", "00011", "00001", "00000", "10000", "11000", "11100", "11110" };
 
-const int confirmationDelay = 100;
-
+// Polling
 const unsigned long buttonPollInterval = 50;     // 20 times per second
 const unsigned long IMUPollInterval = 33;        // 30 times per second
 const unsigned long timerPollInterval = 1000;    // 1 time per second
@@ -175,10 +179,8 @@ void checkIMU() {
       Serial.println("IMU: Tilting");
     }
     if (tilt >= 0.975f && stableAfterTiming) {
-      confirmationFlash(1);
-      timer = millis() + timerMillis;
       stableAfterTiming = false;
-      Serial.println("IMU: Timer start");
+      startTimer(defaultTimerMillis);
     } else if (timer == 0) {
       float frac = tiltLightFunc(tilt);
       setLEDBrightnessFloat(frac);
@@ -236,6 +238,13 @@ void checkIMU() {
   }
 
   //Serial.println();
+}
+
+void startTimer(unsigned long millisToWait) {
+  confirmationFlash(1);
+  timerMillis = millisToWait;
+  timer = millis() + millisToWait;
+  Serial.println("Timer: Start");
 }
 
 void checkTimer() {
@@ -305,8 +314,8 @@ void checkBluetooth() {
   }
 
   if (timerCharacteristic.written()) {
-    confirmationFlash(1);
-    timer = millis() + (long)timerCharacteristic.value() * 60 * 1000;
+    unsigned long millisToWait = (long)timerCharacteristic.value() * 60 * 1000;
+    startTimer(millisToWait);
   }
 
   if (morseCharacteristic.written()) {
@@ -325,11 +334,13 @@ float tiltLightFunc(float x) {
 }
 
 // https://www.desmos.com/calculator/bo4g58kh6h
+// https://www.desmos.com/calculator/0m9bis4prk
 // Spend more time bright, then quickly fade towards the end of the timer
 float timerLightFunc(float x) {
-  //const float a = 0.07f, b = -0.005f, c = 0.065f;
-  const float a = 0.25f, b = -0.04f, c = 0.2f;
-  return (x + b) / (x + a + b) + c;
+  //const float a = 0.07f, b = -0.005f, c = 0.065f, d = 1.0f;
+  //const float a = 0.25f, b = -0.04f, c = 0.2f, d = 1.0f;
+  const float a = 0.3f, b = -0.787f, c = -1.614f, d = 0.3333f;
+  return x <= d ? (x + b) / (x + a + b) + c : 1;
 }
 
 void setLEDBrightnessInt(int val) {
