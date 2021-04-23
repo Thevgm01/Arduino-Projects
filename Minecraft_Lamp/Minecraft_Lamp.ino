@@ -8,7 +8,7 @@ BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D10476
 BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
 
 const int ledPin = 3;
-byte ledState = 0;
+int ledState = 0;
 
 const int buttonPin = 5;
 byte lastButtonState = 1;
@@ -24,10 +24,15 @@ int bonkFreeze = 0;
 float lastGyroscopeX, lastGyroscopeY, lastGyroscopeZ;
 
 // Tilting
-const float tiltThreshold = 0.1f;
-float lastLightFrac = 0.0f;
+const float tiltThreshold = 0.05f;
+bool tilting = false;
+bool stableAfterTilt = false;
+bool stableAfterTiming = false;
+const int tiltHistoryLength = 8;
+int tiltHistoryIndex = 0;
+float yAccelerationHistory[tiltHistoryLength];
 
-const unsigned long timerMillis = 1 * 60 * 1000;
+const unsigned long timerMillis = 15 * 60 * 1000;
 unsigned long timer = 0;
 
 const int morseDelay = 100;
@@ -46,7 +51,7 @@ const unsigned long IMUPollInterval = 33;        // 30 times per second
 const unsigned long timerPollInterval = 1000;    // 1 time per second
 const unsigned long bluetoothPollInterval = 200; // 5 times per second
 unsigned long buttonPollStart = 7;
-unsigned long IMUPolStart = 13;
+unsigned long IMUPollStart = 13;
 unsigned long timerPollStart = 17;
 unsigned long bluetoothPollStart = 19;
 
@@ -54,7 +59,7 @@ void setup() {
   Serial.begin(9600);
   //while (!Serial);
 
-  pinMode(ledPin, OUTPUT);
+  //pinMode(ledPin, OUTPUT); // This gets called when the LED is toggled
   pinMode(buttonPin, INPUT_PULLUP);
 
   // Bluetooth initialization
@@ -102,7 +107,7 @@ void errorLoop() {
 void loop() {
   unsigned long curMillis = millis();
   awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
-  awaitPoll(IMUPolStart,        IMUPollInterval,       curMillis, &checkIMU);
+  awaitPoll(IMUPollStart,       IMUPollInterval,       curMillis, &checkIMU);
   awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
   awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
 }
@@ -132,23 +137,18 @@ void checkButton() {
   bool pressed = buttonPressed && !lastButtonState;
   if (pressed) {
     toggleLED();
-    // gyroscopeTimer = gyroscopeStartTimer;
   }
   lastButtonState = buttonPressed;
 
 }
 
-const int accelerometerHistoryLength = 5;
-int accelerometerHistoryIndex = 0;
-float yAccelerationHistory[accelerometerHistoryLength];
-
 void checkIMU() {
   float ax, ay, az, gx, gy, gz;
-  accelerometerHistoryIndex = (accelerometerHistoryIndex + 1) % accelerometerHistoryLength;
+  tiltHistoryIndex = (tiltHistoryIndex + 1) % tiltHistoryLength;
   
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
-    yAccelerationHistory[accelerometerHistoryIndex] = ay;
+    yAccelerationHistory[tiltHistoryIndex] = ay;
     //printXYZ(ax, ay, az);
   }
 
@@ -157,42 +157,42 @@ void checkIMU() {
     //printXYZ(gx, gy, gz);
   }
 
-  // Get the lowest of recent accelerometer y values to cancel out bonking fluctuations
-  /*float tilt = 999;
-  for (int i = 0; i < accelerometerHistoryLength; ++i) {
-    if (yAccelerationHistory[i] + 100 < tilt) {
-      tilt = yAccelerationHistory[i] + 100;
-    }
-  }
-  tilt = tilt + 1 - 100;*/
-
+  // Get the average of recent accelerometer y values to cancel out bonking fluctuations
   float tilt = 0;
-  for (int i = 0; i < accelerometerHistoryLength; ++i) {
+  for (int i = 0; i < tiltHistoryLength; ++i) {
     tilt += yAccelerationHistory[i];
   }
-  tilt /= (float)accelerometerHistoryLength;
+  tilt /= (float)tiltHistoryLength;
   tilt = tilt + 1;
-  Serial.print(tilt);
-  Serial.print("\t");
+  //Serial.print(tilt);
+  //Serial.print("\t");
 
   // Handle tilting to activate the timer
   if (tilt >= tiltThreshold) {
-    if (tilt >= 0.975f) {
+    tilting = true;
+    if (stableAfterTilt) {
+      stableAfterTilt = false;
+      Serial.println("IMU: Tilting");
+    }
+    if (tilt >= 0.975f && stableAfterTiming) {
       confirmationFlash(1);
       timer = millis() + timerMillis;
-    } else {
-      //float base = -5;
-      //float frac = exp(base - base * tilt) * (-tilt + 2);
-      float frac = lightFunc(tilt) - 0.025f; // To start at 0 when including the tilt
-      if (timer == 0 || frac > lastLightFrac) {
-        analogWrite(ledPin, frac * 255);
-        lastLightFrac = frac;
-      }
+      stableAfterTiming = false;
+      Serial.println("IMU: Timer start");
+    } else if (timer == 0) {
+      float frac = tiltLightFunc(tilt);
+      setLEDBrightnessFloat(frac);
     }
+  } else {
+    if (tilting && !timer) {
+      toggleLED();
+      toggleLED();
+    }
+    tilting = false;
   }
 
   // Handle bonking
-  else {
+  if (!tilting) {
     // Take the absolute values
     float x = abs(gx);
     float y = abs(gy);
@@ -210,7 +210,7 @@ void checkIMU() {
 
     //printXYZ(x, y, z);
     float diff = x + /*y +*/ z;
-    Serial.print(diff);
+    //Serial.print(diff);
     
     // Bonking
     if(bonkFreeze > 0) {
@@ -219,8 +219,14 @@ void checkIMU() {
       if (diff > bonkTolerance) {
         ++bonkLoops;
       } else {
-        if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
+        if (bonkLoops > 0 && bonkLoops < maxBonkLoops) {
+          Serial.println("IMU: Bonk triggered");
           toggleLED();
+          bonkFreeze = maxBonkLoops;
+        }
+        if (!stableAfterTilt || !stableAfterTiming) {
+          stableAfterTilt = true;
+          stableAfterTiming = true;
           bonkFreeze = maxBonkLoops;
         }
         bonkLoops = 0;
@@ -229,26 +235,20 @@ void checkIMU() {
     
   }
 
-  Serial.println();
+  //Serial.println();
 }
 
 void checkTimer() {
-  if (timer > 0) {
-    if (timer - millis() > 0) { // Still timing
-      float frac = lightFunc((timer - millis()) / timerMillis);
-      analogWrite(ledPin, frac);
-      lastLightFrac = frac;
+  if (timer) {
+    unsigned long diff = (timer - millis());
+    Serial.println("Timer: " + String(diff) + " ms remaining");
+    if (diff < timerMillis) { // Still timing
+      float frac = timerLightFunc((float)diff / timerMillis);
+      setLEDBrightnessFloat(frac);
     } else {
-      toggleLED();
+      toggleLED(); // Automatically sets timer to 0
     }
   }
-}
-
-float lightFunc(float x) {
-  // All these values are hard-coded to feel good, check this graph for details
-  // The graph needs to start at (0.1, 0) and end at (1, 1)
-  // https://www.desmos.com/calculator/5awgefuwza
-  return (2 * tan(0.45f * PI * x) / PI) * 0.25f;
 }
 
 void morseCode(String str) {
@@ -314,9 +314,36 @@ void checkBluetooth() {
   }
 }
 
+// All these values are hard-coded to feel good, check links for details
+// Make sure 'x' is between 0 and 1
+
+// https://www.desmos.com/calculator/in73bophjw
+// Spend more time dim to counteract the logarithmic nature of light while tilting
+float tiltLightFunc(float x) {
+  const float a = 0.5f, b = 0.45f, c = 0.025f;
+  return a * tan(b * PI * x) / PI - c;
+}
+
+// https://www.desmos.com/calculator/bo4g58kh6h
+// Spend more time bright, then quickly fade towards the end of the timer
+float timerLightFunc(float x) {
+  //const float a = 0.07f, b = -0.005f, c = 0.065f;
+  const float a = 0.25f, b = -0.04f, c = 0.2f;
+  return (x + b) / (x + a + b) + c;
+}
+
+void setLEDBrightnessInt(int val) {
+  analogWrite(ledPin, val);
+  Serial.println("LED Brightness: " + String(val));
+}
+
+void setLEDBrightnessFloat(float frac) {
+  setLEDBrightnessInt(round(constrain(frac * 255, 0, 255)));
+}
+
 void toggleLED() {
   ledState = 1 - ledState;
-  analogWrite(ledPin, ledState * 255); // toggle the LED
+  setLEDBrightnessInt(ledState * 255);
   digitalWrite(LED_BUILTIN, ledState);
   timer = 0;
 }
