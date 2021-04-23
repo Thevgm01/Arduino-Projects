@@ -16,12 +16,15 @@ int buttonHoldLoops = 0;
 int buttonHoldFlash = 0;
 const int delayBetweenHoldFlashes = 500;
 
-// Gyroscope
+// Bonking
 const int maxBonkLoops = 10;
 const float bonkTolerance = 5.0f;
 int bonkLoops = 0;
 int bonkTimer = 0;
 float lastGyroscopeX, lastGyroscopeY, lastGyroscopeZ;
+
+// Tilting
+const float tiltThreshold = 0.05f;
 
 bool timing = false;
 
@@ -36,14 +39,12 @@ const String morseTable[] =
 
 const int confirmationDelay = 100;
 
-const unsigned long buttonPollInterval = 50;
-const unsigned long accelerometerPollInterval = 30;
-const unsigned long gyroscopePollInterval = 30;
-const unsigned long timerPollInterval = 1000;
-const unsigned long bluetoothPollInterval = 200;
+const unsigned long buttonPollInterval = 50;     // 20 times per second
+const unsigned long IMUPollInterval = 33;        // 30 times per second
+const unsigned long timerPollInterval = 1000;    // 1 time per second
+const unsigned long bluetoothPollInterval = 200; // 5 times per second
 unsigned long buttonPollStart = 7;
-unsigned long accelerometerPollStart = 11;
-unsigned long gyroscopePollStart = 13;
+unsigned long IMUPolStart = 13;
 unsigned long timerPollStart = 17;
 unsigned long bluetoothPollStart = 19;
 
@@ -98,11 +99,10 @@ void errorLoop() {
 
 void loop() {
   unsigned long curMillis = millis();
-  awaitPoll(buttonPollStart,        buttonPollInterval,        curMillis, &checkButton);
-  //awaitPoll(accelerometerPollStart, accelerometerPollInterval, curMillis, &checkAccelerometer);
-  awaitPoll(gyroscopePollStart,     gyroscopePollInterval,     curMillis, &checkGyroscope);
-  awaitPoll(timerPollStart,         timerPollInterval,         curMillis, &checkTimer);
-  awaitPoll(bluetoothPollStart,     bluetoothPollInterval,     curMillis, &checkBluetooth);
+  awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
+  awaitPoll(IMUPolStart,        IMUPollInterval,       curMillis, &checkIMU);
+  awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
+  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
 }
 
 bool isButtonPressed() {
@@ -136,29 +136,51 @@ void checkButton() {
 
 }
 
-//int a = 0;
-//float total[3];
+const int IMUHistoryLength = 3;
+int IMUHistoryIndex = 0;
+float yAccelHistory[IMUHistoryLength];
+float gyroDiffHistory[IMUHistoryLength];
 
-void checkAccelerometer() {
-  if (IMU.gyroscopeAvailable()) {
-    float x, y, z;
-    IMU.readAcceleration(x, y, z);
-    printXYZ(x, y, z);
-    float base = -5;
-    float frac = exp(base - base * z) * (-z + 2);
-    analogWrite(ledPin, frac * 255);
+void checkIMU() {
+  float ax, ay, az, gx, gy, gz;
+  IMUHistoryIndex = (IMUHistoryIndex + 1) % IMUHistoryLength;
+  
+  if (IMU.accelerationAvailable()) {
+    IMU.readAcceleration(ax, ay, az);
+    yAccelHistory[IMUHistoryIndex] = ay;
+    //printXYZ(ax, ay, az);
   }
-}
 
-void checkGyroscope() {
   if (IMU.gyroscopeAvailable()) {
-    float x, y, z;
-    IMU.readGyroscope(x, y, z);
+    IMU.readGyroscope(gx, gy, gz);
+    //printXYZ(gx, gy, gz);
+  }
 
+  float tilt = 0;
+  for (int i = 0; i < IMUHistoryLength; ++i) {
+    tilt += yAccelHistory[i];
+  }
+  tilt /= IMUHistoryLength;
+  tilt = 1 + tilt;
+  Serial.print(tilt);
+  
+  //Serial.println(tilt);
+  if (tilt > tiltThreshold) {
+    if (tilt >= 1 - tiltThreshold) {
+      confirmationFlash(1);
+      timing = true;
+    } else {
+      float base = -5;
+      float frac = exp(base - base * tilt) * (-tilt + 2);
+      analogWrite(ledPin, frac * 255);
+    }
+  }
+  
+  else {
     // Take the absolute values
-    x = abs(x);
-    y = abs(y);
-    z = abs(z);
+    float x = abs(gx);
+    float y = abs(gy);
+    float z = abs(gz);
     
     // Filter out random spikes
     // These spikes seem to happen randomly while at rest, to all axes, and the value is always near 15.5
@@ -171,26 +193,21 @@ void checkGyroscope() {
     lastGyroscopeZ = z;
 
     //printXYZ(x, y, z);
+    gyroDiffHistory[IMUHistoryIndex] = x + y + z;
 
-    /*
-    total[a] = x + y + z;
-    Serial.print(total[a]);
-    Serial.print("\t");
-    a = (a + 1) % 3;
-
-    float totalDiff = 0.0f;
-    for(int i = 0; i < 3; ++i) {
-      totalDiff += total[i];
+    float diff = 0;
+    for (int i = 0; i < IMUHistoryLength; ++i) {
+      diff += gyroDiffHistory[i];
     }
-    totalDiff /= 3.0f;
-    Serial.println(totalDiff);
-    */
+    diff /= IMUHistoryLength;
+    Serial.print("\t");
+    Serial.println(diff);
     
     // Bonking
     if(bonkTimer > 0) {
       --bonkTimer;
     } else {
-      if (x + y + z > bonkTolerance) {
+      if (diff > bonkTolerance) {
         ++bonkLoops;
       } else {
         if(bonkLoops > 0 && bonkLoops < maxBonkLoops) {
