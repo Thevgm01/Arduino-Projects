@@ -6,6 +6,7 @@ BLEService ledService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Servic
 BLEByteCharacteristic toggleCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLEWrite);
 BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLENotify | BLEWrite);
 BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
+BLEByteCharacteristic gameCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
 
 const int ledPin = 3;
 int ledState = 0;
@@ -49,6 +50,19 @@ const String morseTable[] =
 //0,       1        2        3        4        5        6        7        8        9
  "11111", "01111", "00111", "00011", "00001", "00000", "10000", "11000", "11100", "11110" };
 
+// Game
+// Wait a random amount of time from minDelay to maxDelay
+// Turn on the light for the specified reaction time
+// If the player bonks while the light is on, add a point and reduce the next reaction time, go to step 1
+// If the player bonks while the light is off, game over
+const unsigned long minDelay = 500;
+const unsigned long maxDelay = 4000;
+const unsigned long startReactionTime = 1000;
+const unsigned long minReactionTime = 100;
+unsigned long reactionTime = 0;
+unsigned long offTime = 0;
+byte points = 0;
+
 // Polling
 const unsigned long buttonPollInterval = 50;     // 20 times per second
 const unsigned long IMUPollInterval = 33;        // 30 times per second
@@ -80,6 +94,7 @@ void setup() {
   ledService.addCharacteristic(toggleCharacteristic);
   ledService.addCharacteristic(timerCharacteristic);
   ledService.addCharacteristic(morseCharacteristic);
+  ledService.addCharacteristic(gameCharacteristic);
 
   // Add service
   BLE.addService(ledService);
@@ -110,10 +125,10 @@ void errorLoop() {
 
 void loop() {
   unsigned long curMillis = millis();
+  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
   awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
   awaitPoll(IMUPollStart,       IMUPollInterval,       curMillis, &checkIMU);
   awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
-  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
 }
 
 bool isButtonPressed() {
