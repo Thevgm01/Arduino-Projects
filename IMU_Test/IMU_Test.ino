@@ -2,10 +2,11 @@
 
 int buttonPin = 5;
 int state = 1;
-int filter = 0;
+int axis = 0;
 
-float emaX, emaY, emaZ;
-const float emaAlpha = 0.3f;
+float emaReading = 0.0f;
+const float emaAlpha = 0.1f;
+float reading, lowpass, highpass;
 
 byte lastButtonPressed = 0;
 unsigned long buttonHoldTime = 0;
@@ -48,11 +49,39 @@ void loop() {
   }
 
   if (title != "") {
-    filterXYZ(x, y, z);
+    switch (axis) {
+      case 0:
+        reading = x;
+        title += "X";
+        break;
+      case 1:
+        reading = y;
+        title += "Y";
+        break;
+      case 2:
+        reading = z;
+        title += "Z";
+        break;
+    }
+    filterReading();
     Serial.print(title + ",");
-    Serial.println(String(emaX) + "," + String(emaY) + "," + String(emaZ));
+    Serial.println(String(reading) + "," + String(lowpass) + "," + String(highpass));
   }
 
+  handleButton();
+}
+
+void filterReading() {
+  emaReading = (emaAlpha * reading) + ((1 - emaAlpha) * emaReading);
+  lowpass = emaReading;
+  highpass = reading - emaReading;
+}
+
+bool isButtonPressed() {
+  return !digitalRead(buttonPin);
+}
+
+void handleButton() {
   if (isButtonPressed()) {
     if (!lastButtonPressed) {
       buttonHoldTime = millis() + 1000;
@@ -64,36 +93,9 @@ void loop() {
   } else if(lastButtonPressed) {
     buttonHoldTime = 0;
     if (!stateChanged) {
-      filter = (filter + 1) % 3;
+      axis = (axis + 1) % 3;
     }
     stateChanged = false;
   }
   lastButtonPressed = isButtonPressed();
-}
-
-bool isButtonPressed() {
-  return !digitalRead(buttonPin);
-}
-
-void filterXYZ(float x, float y, float z) {
-  switch (filter) {
-    case 0: // None
-      emaX = x;
-      emaY = y;
-      emaZ = z;
-      title += "Unfiltered";
-      break;
-    case 1: // Low-pass
-      emaX = x * emaAlpha + emaX * (1 - emaAlpha);
-      emaY = y * emaAlpha + emaY * (1 - emaAlpha);
-      emaZ = z * emaAlpha + emaZ * (1 - emaAlpha);
-      title += "LowPass";
-      break;
-    case 2: // High-pass
-      emaX = x - (x * emaAlpha + emaX * (1 - emaAlpha));
-      emaY = y - (y * emaAlpha + emaY * (1 - emaAlpha));
-      emaZ = z - (z * emaAlpha + emaZ * (1 - emaAlpha));
-      title += "HighPass";
-      break;
-  }
 }
