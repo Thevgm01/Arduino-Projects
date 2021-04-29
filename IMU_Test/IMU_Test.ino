@@ -4,11 +4,12 @@ int buttonPin = 5;
 int buttonMode = 2;
 int sensor = 1; // Acceleration
 int axis = 1; // Y axis
-int emaButtonPresses = 5;
+int emaButtonPressesLow = 3;
+int emaButtonPressesHigh = 5;
 
-float emaReading = 0.0f;
-float emaAlpha = 0.5f;
-float reading, lowpass, highpass;
+float emaAlphaLow = 0.3f;
+float emaAlphaHigh = 0.5f;
+float emaReadingLow, emaReadingHigh, lowpass, highpass, bandpass;
 
 byte lastButtonPressed = 0;
 unsigned long buttonHoldTime = 0;
@@ -33,64 +34,71 @@ void loop() {
     case 0:
       if (IMU.magneticFieldAvailable()) {
         IMU.readMagneticField(x, y, z);
-        title = "MagneticField";
+        title = "MagneticField_";
       }
       break;
     case 1:
       if (IMU.accelerationAvailable()) {
         IMU.readAcceleration(x, y, z);
-        title = "Acceleration";
+        title = "Acceleration_";
       }
       break;
     case 2:
       if (IMU.gyroscopeAvailable()) {
         IMU.readGyroscope(x, y, z);
-        title = "Gyroscope";
+        title = "Gyroscope_";
       }
       break;
   }
 
+  float f;
   if (title != "") {
     switch (axis) {
       case 0:
-        reading = x;
-        title += "X";
+        f = x;
+        title += "X_";
         break;
       case 1:
-        reading = y;
-        title += "Y";
+        f = y;
+        title += "Y_";
         break;
       case 2:
-        reading = z;
-        title += "Z";
+        f = z;
+        title += "Z_";
         break;
     }
 
-    filterReading();
-    title += "_ema=" + String(emaAlpha);
-    Serial.print(title + ",");
+    filterReading(f);
+    title += "emaLow=" + String(emaAlphaLow) + "_";
+    title += "emaHigh=" + String(emaAlphaHigh) + "_";
 
     switch (buttonMode) {
       case 0:
-        Serial.print("Button=Sensor,");
+        title += "Button=Sensor";
         break;
       case 1:
-        Serial.print("Button=Axis,");
+        title += "Button=Axis";
         break;
       case 2:
-        Serial.print("Button=EmaAlpha,");
+        title += "Button=EmaAlphaLow";
+        break;
+      case 3:
+        title += "Button=EmaAlphaHigh";
         break;
     }
-    Serial.println(String(reading) + "," + String(lowpass) + "," + String(highpass));
+    Serial.print(title);
+    Serial.println("," + String(f) + "," + String(lowpass) + "," + String(highpass) + "," + String(bandpass));
   }
 
   handleButton();
 }
 
-void filterReading() {
-  emaReading = (emaAlpha * reading) + ((1 - emaAlpha) * emaReading);
-  lowpass = emaReading;
-  highpass = reading - emaReading;
+void filterReading(float f) {
+  emaReadingLow = (emaAlphaLow * f) + ((1 - emaAlphaLow) * emaReadingLow);
+  emaReadingHigh = (emaAlphaHigh * f) + ((1 - emaAlphaHigh) * emaReadingHigh);
+  lowpass = emaReadingLow;
+  highpass = reading - emaReadingLow;
+  bandpass = emaReadingHigh - emaReadingLow;
 }
 
 bool isButtonPressed() {
@@ -102,7 +110,7 @@ void handleButton() {
     if (!lastButtonPressed) {
       buttonHoldTime = millis() + 1000;
     } else if (millis() >= buttonHoldTime) {
-      buttonMode = (buttonMode + 1) % 3;
+      buttonMode = (buttonMode + 1) % 4;
       modeChanged = true;
       buttonHoldTime = millis() + 1000;
     }
@@ -117,8 +125,12 @@ void handleButton() {
           axis = (axis + 1) % 3;
           break;
         case 2:
-          emaButtonPresses = (emaButtonPresses + 1) % 11;
-          emaAlpha = emaButtonPresses / 10.0f;
+          emaButtonPressesLow = (emaButtonPressesLow + 1) % 11;
+          emaAlphaLow = emaButtonPressesLow / 10.0f;
+          break;
+        case 3:
+          emaButtonPressesHigh = (emaButtonPressesHigh + 1) % 11;
+          emaAlphaHigh = emaButtonPressesHigh / 10.0f;
           break;
       }
     }
