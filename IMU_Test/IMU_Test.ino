@@ -1,16 +1,18 @@
 #include <Arduino_LSM9DS1.h>
 
 int buttonPin = 5;
-int state = 1;
-int axis = 0;
+int buttonMode = 2;
+int sensor = 1; // Acceleration
+int axis = 1; // Y axis
+int emaButtonPresses = 5;
 
 float emaReading = 0.0f;
-const float emaAlpha = 0.1f;
+float emaAlpha = 0.5f;
 float reading, lowpass, highpass;
 
 byte lastButtonPressed = 0;
 unsigned long buttonHoldTime = 0;
-bool stateChanged = false;
+bool modeChanged = false;
 
 String title;
 
@@ -27,7 +29,7 @@ void loop() {
 
   title = "";
   float x, y, z;
-  switch (state) {
+  switch (sensor) {
     case 0:
       if (IMU.magneticFieldAvailable()) {
         IMU.readMagneticField(x, y, z);
@@ -63,8 +65,22 @@ void loop() {
         title += "Z";
         break;
     }
+
     filterReading();
+    title += "_ema=" + String(emaAlpha);
     Serial.print(title + ",");
+
+    switch (buttonMode) {
+      case 0:
+        Serial.print("Button=Sensor,");
+        break;
+      case 1:
+        Serial.print("Button=Axis,");
+        break;
+      case 2:
+        Serial.print("Button=EmaAlpha,");
+        break;
+    }
     Serial.println(String(reading) + "," + String(lowpass) + "," + String(highpass));
   }
 
@@ -86,16 +102,27 @@ void handleButton() {
     if (!lastButtonPressed) {
       buttonHoldTime = millis() + 1000;
     } else if (millis() >= buttonHoldTime) {
+      buttonMode = (buttonMode + 1) % 3;
+      modeChanged = true;
       buttonHoldTime = millis() + 1000;
-      state = (state + 1) % 3;
-      stateChanged = true;
     }
   } else if(lastButtonPressed) {
     buttonHoldTime = 0;
-    if (!stateChanged) {
-      axis = (axis + 1) % 3;
+    if (!modeChanged) {
+      switch (buttonMode) {
+        case 0:
+          sensor = (sensor + 1) % 3;
+          break;
+        case 1:
+          axis = (axis + 1) % 3;
+          break;
+        case 2:
+          emaButtonPresses = (emaButtonPresses + 1) % 11;
+          emaAlpha = emaButtonPresses / 10.0f;
+          break;
+      }
     }
-    stateChanged = false;
+    modeChanged = false;
   }
   lastButtonPressed = isButtonPressed();
 }
