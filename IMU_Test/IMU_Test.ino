@@ -87,7 +87,7 @@ void loop() {
         break;
     }
     Serial.print(title);
-    Serial.println("," + String(f) + "," + String(lowpass) + "," + String(highpass) + "," + String(bandpass));
+    Serial.println("," + String(f) + "," + String(lowpass) + "," + String(highpass)/* + "," + String(bandpass)*/);
   }
 
   handleButton();
@@ -97,7 +97,7 @@ void filterReading(float f) {
   emaReadingLow = (emaAlphaLow * f) + ((1 - emaAlphaLow) * emaReadingLow);
   emaReadingHigh = (emaAlphaHigh * f) + ((1 - emaAlphaHigh) * emaReadingHigh);
   lowpass = emaReadingLow;
-  highpass = reading - emaReadingLow;
+  highpass = f - emaReadingHigh;
   bandpass = emaReadingHigh - emaReadingLow;
 }
 
