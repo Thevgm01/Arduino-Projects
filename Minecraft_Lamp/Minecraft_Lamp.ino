@@ -11,20 +11,26 @@ BLEByteCharacteristic gameCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214",
 const int ledPin = 3;
 int ledState = 0;
 const int confirmationDelay = 100;
+const int errorDelay = 500;
+
+int ignoreFirstIMULoops = 100;
+
+const bool printMessages = true, printGraphs = false;
 
 // Button presses
 const int buttonPin = 5;
 byte lastButtonState = 1;
-int buttonHoldLoops = 0;
-int buttonHoldFlash = 0;
-const int delayBetweenHoldFlashes = 500;
 
 // IMU
 const byte xAccel = 0, yAccel = 1, zAccel = 2,
            xGyro  = 3, yGyro  = 4, zGyro  = 5;
-const byte highpassMask = 1 << yAccel;
-const byte lowpassMask =  1 << zAccel | 1 << yGyro | highpassMask;
-float highpasses[6], lowpasses[6], emaAlphas[6];
+const byte smoothedHighpassMask = 1 << zGyro;
+const byte highpassMask = 1 << yAccel | smoothedHighpassMask;
+const byte lowpassMask =  1 << zAccel | highpassMask;
+const float emaAlphas[] = 
+         { 0.1f,       0.9f,       0.1f,
+           0.1f,       0.1f,       0.03f };
+float smoothedHighpasses[6], highpasses[6], lowpasses[6];
 
 // Bonking
 const float bonkThreshold = 0.05f;
@@ -32,13 +38,9 @@ const unsigned long bonkDelayTimerDefault = 50;
 unsigned long bonkDelayTimer = 0;
 
 // Tilting
-const float tiltThreshold = 0.05f;
+const float tiltThreshold = 0.1f;
+const float tiltHandheldThreshold = 2.0f;
 bool tilting = false;
-bool stableAfterTilt = false;
-bool stableAfterTiming = false;
-const int tiltHistoryLength = 8;
-int tiltHistoryIndex = 0;
-float yAccelerationHistory[tiltHistoryLength];
 
 // Timing
 const unsigned long defaultTimerMillis = 15 * 60 * 1000;
@@ -69,18 +71,20 @@ unsigned long offTime = 0;
 byte points = 0;
 
 // Polling
+const unsigned long IMUPollInterval = 0;         // Every loop
 const unsigned long buttonPollInterval = 50;     // 20 times per second
-const unsigned long timerPollInterval = 1000;    // 1 time per second
+const unsigned long timerPollInterval = 500;     // 2 times per second
 const unsigned long bluetoothPollInterval = 200; // 5 times per second
+unsigned long IMUPollStart = 0;
 unsigned long buttonPollStart = 7;
-unsigned long timerPollStart = 17;
+unsigned long timerPollStart = 13;
 unsigned long bluetoothPollStart = 19;
 
 void setup() {
   Serial.begin(9600);
   //while (!Serial);
 
-  //pinMode(ledPin, OUTPUT); // This gets called when the LED is toggled
+  //pinMode(ledPin, OUTPUT); // Not needed because of analogWrite
   pinMode(buttonPin, INPUT_PULLUP);
 
   // Bluetooth initialization
@@ -118,21 +122,18 @@ void setup() {
     errorLoop();
   }
 
-  emaAlphas[yAccel] = 0.9f;
-  emaAlphas[zAccel] = 0.1f;
-  emaAlphas[yGyro]  = 0.1f;
 }
 
 void errorLoop() {
   while (1) {
     confirmationFlash(0);
-    delay(delayBetweenHoldFlashes);
+    delay(errorDelay);
   }
 }
 
 void loop() {
   unsigned long curMillis = millis();
-  checkIMU(curMillis);
+  awaitPoll(IMUPollStart,       IMUPollInterval,       curMillis, &checkIMU);
   awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
   awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
   awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
@@ -143,12 +144,12 @@ bool isButtonPressed() {
 }
 
 void checkButton(unsigned long curMillis) {
-  byte buttonPressed = isButtonPressed();  
-  bool pressed = buttonPressed && !lastButtonState;
+  byte buttonState = isButtonPressed();  
+  bool pressed = buttonState && !lastButtonState;
   if (pressed) {
     toggleLED();
   }
-  lastButtonState = buttonPressed;
+  lastButtonState = buttonState;
 
 }
 
@@ -166,65 +167,76 @@ void checkIMU(unsigned long curMillis) {
   for (int i = 0; i < 6; ++i) {
     if (bitRead(lowpassMask, i)) {
       lowpasses[i] = emaAlphas[i] * readings[i] + (1 - emaAlphas[i]) * lowpasses[i];
-      Serial.print(lowpasses[i]);
-      Serial.print(",");
+      printGraph(lowpasses[i]);
     }
     if (bitRead(highpassMask, i)) {
       highpasses[i] = readings[i] - lowpasses[i];
-      Serial.print(highpasses[i]);
-      Serial.print(",");
+      printGraph(highpasses[i]);
+    }
+    if (bitRead(smoothedHighpassMask, i)) {
+      smoothedHighpasses[i] = emaAlphas[i] * abs(highpasses[i]) + (1 - emaAlphas[i]) * smoothedHighpasses[i];
+      printGraph(smoothedHighpasses[i]);
     }
   }
-  Serial.println();
-  
-  //Serial.print(String(abs(yAccelHighpass) * 100) + ",");
-  //Serial.println(bonkThreshold * 100);
+  if (printGraphs) {
+    Serial.println();
+  }
+
+  // Wait for the initial values to settle down
+  if (ignoreFirstIMULoops > 0) {
+    --ignoreFirstIMULoops;
+    return;
+  }
 
   // Handle tilting forward to activate the timer
-  // Make sure Gyro Y < some threshold (to prevent detection while being held)
+  // Make sure Gyro Z < some threshold (to prevent detection while being held)
   // Make sure Accel Z > another threshold
-  /*
-  if (yAccelLowpass + 1 >= tiltThreshold) {
-    tilting = true;
-    Serial.println("IMU: Tilting");
-    if (tilt >= 0.975f && stableAfterTiming) {
-      stableAfterTiming = false;
-      startTimer(defaultTimerMillis);
-    } else if (timer == 0) {
-      float frac = tiltLightFunc(tilt);
-      setLEDBrightnessFloat(frac);
+  if (lowpasses[zAccel] >= tiltThreshold && smoothedHighpasses[zGyro] < tiltHandheldThreshold) {
+    if (!tilting) {
+      printMessage("IMU: Tilting began");
+      tilting = true;
+    }
+    if (timer == 0) {
+      if (lowpasses[zAccel] >= 0.975f) {
+        startTimer(curMillis, defaultTimerMillis);
+      } else {
+        float frac = tiltLightFunc(lowpasses[zAccel]);
+        setLEDBrightnessFloat(frac);
+      }
     }
   } else {
-    if (tilting && !timer) {
-      setLEDBrightnessInt(ledState);
+    if (tilting) {
+      printMessage("IMU: Tilting stopped");
+      tilting = false;
+      if(!timer) {
+        setLEDBrightnessInt(ledState);
+      }
     }
-    tilting = false;
   }
-  */
 
   // Handle bonking
-  if (abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
+  if (!tilting && abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
     if (curMillis - bonkDelayTimer >= bonkDelayTimerDefault) { // Enough time has passed since the last bonk
-      //Serial.println("IMU: Bonk triggered");
+      printMessage("IMU: Bonk triggered");
       toggleLED();
     }
     bonkDelayTimer = curMillis;
   }
 }
 
-void startTimer(unsigned long millisToWait) {
+void startTimer(unsigned long curMillis, unsigned long millisToWait) {
   confirmationFlash(1);
   timerMillis = millisToWait;
-  timer = millis() + millisToWait;
-  Serial.println("Timer: Start");
+  timer = curMillis;
+  printMessage("Timer: Start");
 }
 
 void checkTimer(unsigned long curMillis) {
   if (timer) {
-    unsigned long diff = (timer - curMillis);
-    Serial.println("Timer: " + String(diff) + " ms remaining");
+    unsigned long diff = curMillis - timer;
+    printMessage("Timer: " + String(diff) + "/" + String(timerMillis) + " ms");
     if (diff < timerMillis) { // Still timing
-      float frac = timerLightFunc((float)diff / timerMillis);
+      float frac = timerLightFunc(((float)timerMillis - diff) / timerMillis);
       setLEDBrightnessFloat(frac);
     } else {
       toggleLED(); // Automatically sets timer to 0
@@ -287,7 +299,7 @@ void checkBluetooth(unsigned long curMillis) {
 
   if (timerCharacteristic.written()) {
     unsigned long millisToWait = (long)timerCharacteristic.value() * 60 * 1000;
-    startTimer(millisToWait);
+    startTimer(curMillis, millisToWait);
   }
 
   if (morseCharacteristic.written()) {
@@ -305,19 +317,15 @@ float tiltLightFunc(float x) {
   return a * tan(b * PI * x) / PI - c;
 }
 
-// https://www.desmos.com/calculator/bo4g58kh6h
-// https://www.desmos.com/calculator/0m9bis4prk
 // Spend more time bright, then quickly fade towards the end of the timer
 float timerLightFunc(float x) {
-  //const float a = 0.07f, b = -0.005f, c = 0.065f, d = 1.0f;
-  //const float a = 0.25f, b = -0.04f, c = 0.2f, d = 1.0f;
-  const float a = 0.3f, b = -0.787f, c = -1.614f, d = 0.3333f;
-  return x <= d ? (x + b) / (x + a + b) + c : 1;
+  float cutoff = 1/3.0f;
+  return x < cutoff ? tiltLightFunc(x / cutoff) : 1;
 }
 
 void setLEDBrightnessInt(int val) {
   analogWrite(ledPin, val);
-  Serial.println("LED Brightness: " + String(val));
+  printMessage("LED Brightness: " + String(val));
 }
 
 void setLEDBrightnessFloat(float frac) {
@@ -335,7 +343,7 @@ void confirmationFlash(int desiredState) {
   //         Cur on  Cur off
   // New on    6       5
   // New off   5       6
-  int startState = ledState;
+  int startState = 0 || ledState; // Account for the fact that ledState is 0 or 255
   for (int i = 0; i < 6 - abs(startState - desiredState); ++i) {
     toggleLED();
     delay(confirmationDelay);
@@ -346,5 +354,17 @@ void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curM
   if (curMillis - timer >= interval) {
     function(curMillis);
     timer = curMillis;
+  }
+}
+
+void printMessage(String message) {
+  if (printMessages) {
+    Serial.println(message);
+  }
+}
+
+void printGraph(float number) {
+  if (printGraphs) {
+    Serial.print(String(number) + ",");
   }
 }
