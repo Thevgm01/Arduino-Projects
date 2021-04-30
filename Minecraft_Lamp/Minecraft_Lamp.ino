@@ -19,12 +19,13 @@ int buttonHoldLoops = 0;
 int buttonHoldFlash = 0;
 const int delayBetweenHoldFlashes = 500;
 
-// Bonking
-const int maxBonkLoops = 10;
-const float bonkTolerance = 2.0f;
-int bonkLoops = 0;
-int bonkFreeze = 0;
-float lastGyroscopeX, lastGyroscopeY, lastGyroscopeZ;
+// IMU
+const float yAccelEmaAlphaLow = 0.1f, yAccelEmaAlphaHigh = 0.9f;
+float yAccelEmaLow, yAccelEmaHigh;
+float yAccelLowpass, yAccelHighpass;
+const float bonkThreshold = 0.05f;
+const unsigned long bonkDelayTimerDefault = 100;
+unsigned long bonkDelayTimer = 0;
 
 // Tilting
 const float tiltThreshold = 0.05f;
@@ -65,11 +66,9 @@ byte points = 0;
 
 // Polling
 const unsigned long buttonPollInterval = 50;     // 20 times per second
-const unsigned long IMUPollInterval = 33;        // 30 times per second
 const unsigned long timerPollInterval = 1000;    // 1 time per second
 const unsigned long bluetoothPollInterval = 200; // 5 times per second
 unsigned long buttonPollStart = 7;
-unsigned long IMUPollStart = 13;
 unsigned long timerPollStart = 17;
 unsigned long bluetoothPollStart = 19;
 
@@ -125,9 +124,9 @@ void errorLoop() {
 
 void loop() {
   unsigned long curMillis = millis();
+  checkIMU(curMillis);
   awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
   awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
-  awaitPoll(IMUPollStart,       IMUPollInterval,       curMillis, &checkIMU);
   awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
 }
 
@@ -135,7 +134,7 @@ bool isButtonPressed() {
   return !digitalRead(buttonPin);
 }
 
-void checkButton() {
+void checkButton(unsigned long curMillis) {
   byte buttonPressed = isButtonPressed();
   if (buttonPressed) {
     ++buttonHoldLoops;
@@ -161,33 +160,24 @@ void checkButton() {
 
 }
 
-void checkIMU() {
-  float ax, ay, az, gx, gy, gz;
-  tiltHistoryIndex = (tiltHistoryIndex + 1) % tiltHistoryLength;
+void checkIMU(unsigned long curMillis) {
+  if (!IMU.accelerationAvailable()) {
+    return;
+  }
   
-  if (IMU.accelerationAvailable()) {
-    IMU.readAcceleration(ax, ay, az);
-    yAccelerationHistory[tiltHistoryIndex] = ay;
-    //printXYZ(ax, ay, az);
-  }
+  float x, y, z;
+  IMU.readAcceleration(x, y, z);
+  yAccelEmaLow = (yAccelEmaAlphaLow * y) + ((1 - yAccelEmaAlphaLow) * yAccelEmaLow);
+  yAccelEmaHigh = (yAccelEmaAlphaHigh * y) + ((1 - yAccelEmaAlphaHigh) * yAccelEmaHigh);
+  yAccelLowpass = yAccelEmaLow;
+  yAccelHighpass = y - yAccelEmaHigh;
+  
+  Serial.print(String(abs(yAccelHighpass) * 100) + ",");
+  Serial.println(bonkThreshold * 100);
 
-  if (IMU.gyroscopeAvailable()) {
-    IMU.readGyroscope(gx, gy, gz);
-    //printXYZ(gx, gy, gz);
-  }
-
-  // Get the average of recent accelerometer y values to cancel out bonking fluctuations
-  float tilt = 0;
-  for (int i = 0; i < tiltHistoryLength; ++i) {
-    tilt += yAccelerationHistory[i];
-  }
-  tilt /= (float)tiltHistoryLength;
-  tilt = tilt + 1;
-  //Serial.print(tilt);
-  //Serial.print("\t");
-
+/*
   // Handle tilting to activate the timer
-  if (tilt >= tiltThreshold) {
+  if (yAccelLowpass >= tiltThreshold) {
     tilting = true;
     if (stableAfterTilt) {
       stableAfterTilt = false;
@@ -202,57 +192,19 @@ void checkIMU() {
     }
   } else {
     if (tilting && !timer) {
-      toggleLED();
-      toggleLED();
+      setLEDBrightnessInt(ledState);
     }
     tilting = false;
   }
+*/
 
   // Handle bonking
-  if (!tilting) {
-    // Take the absolute values
-    float x = abs(gx);
-    float y = abs(gy);
-    float z = abs(gz);
-    
-    // Filter out data spikes
-    // These spikes seem to happen randomly while at rest, to all axes, and the value is always near 15.5
-    if (lastGyroscopeX < bonkTolerance && x >= 15.25f && x <= 15.75f) x = 0.0f;
-    if (lastGyroscopeY < bonkTolerance && y >= 15.25f && y <= 15.75f) y = 0.0f;
-    if (lastGyroscopeZ < bonkTolerance && z >= 15.25f && z <= 15.75f) z = 0.0f;
-
-    lastGyroscopeX = x;
-    lastGyroscopeY = y;
-    lastGyroscopeZ = z;
-
-    //printXYZ(x, y, z);
-    float diff = x + /*y +*/ z;
-    //Serial.print(diff);
-    
-    // Bonking
-    if(bonkFreeze > 0) {
-      --bonkFreeze;
-    } else {
-      if (diff > bonkTolerance) {
-        ++bonkLoops;
-      } else {
-        if (bonkLoops > 0 && bonkLoops < maxBonkLoops) {
-          Serial.println("IMU: Bonk triggered");
-          toggleLED();
-          bonkFreeze = maxBonkLoops;
-        }
-        if (!stableAfterTilt || !stableAfterTiming) {
-          stableAfterTilt = true;
-          stableAfterTiming = true;
-          bonkFreeze = maxBonkLoops;
-        }
-        bonkLoops = 0;
-      }
-    }
-    
+  if (abs(yAccelHighpass) >= bonkThreshold && // Moved enough to trigger a bonk
+      curMillis - bonkDelayTimer >= bonkDelayTimerDefault) { // Enough time has passed since the last bonk
+    Serial.println("IMU: Bonk triggered");
+    toggleLED();
+    bonkDelayTimer = curMillis;
   }
-
-  //Serial.println();
 }
 
 void startTimer(unsigned long millisToWait) {
@@ -262,9 +214,9 @@ void startTimer(unsigned long millisToWait) {
   Serial.println("Timer: Start");
 }
 
-void checkTimer() {
+void checkTimer(unsigned long curMillis) {
   if (timer) {
-    unsigned long diff = (timer - millis());
+    unsigned long diff = (timer - curMillis);
     Serial.println("Timer: " + String(diff) + " ms remaining");
     if (diff < timerMillis) { // Still timing
       float frac = timerLightFunc((float)diff / timerMillis);
@@ -320,7 +272,7 @@ void morseCode(String str) {
   }
 }
 
-void checkBluetooth() {
+void checkBluetooth(unsigned long curMillis) {
   // Poll for BLE events
   BLE.poll();
 
@@ -368,9 +320,8 @@ void setLEDBrightnessFloat(float frac) {
 }
 
 void toggleLED() {
-  ledState = 1 - ledState;
-  setLEDBrightnessInt(ledState * 255);
-  digitalWrite(LED_BUILTIN, ledState);
+  ledState = 255 - ledState;
+  setLEDBrightnessInt(ledState);
   timer = 0;
 }
 
@@ -386,9 +337,9 @@ void confirmationFlash(int desiredState) {
   }
 }
 
-void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curMillis, void (*function)()) {
+void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curMillis, void (*function)(unsigned long)) {
   if (curMillis - timer >= interval) {
-    function();
+    function(curMillis);
     timer = curMillis;
   }
 }
