@@ -20,11 +20,15 @@ int buttonHoldFlash = 0;
 const int delayBetweenHoldFlashes = 500;
 
 // IMU
-const float yAccelEmaAlphaLow = 0.1f, yAccelEmaAlphaHigh = 0.9f;
-float yAccelEmaLow, yAccelEmaHigh;
-float yAccelLowpass, yAccelHighpass;
+const byte xAccel = 0, yAccel = 1, zAccel = 2,
+           xGyro  = 3, yGyro  = 4, zGyro  = 5;
+const byte highpassMask = 1 << yAccel;
+const byte lowpassMask =  1 << zAccel | 1 << yGyro | highpassMask;
+float highpasses[6], lowpasses[6], emaAlphas[6];
+
+// Bonking
 const float bonkThreshold = 0.05f;
-const unsigned long bonkDelayTimerDefault = 100;
+const unsigned long bonkDelayTimerDefault = 50;
 unsigned long bonkDelayTimer = 0;
 
 // Tilting
@@ -113,6 +117,10 @@ void setup() {
     Serial.println("Failed to initialize IMU!");
     errorLoop();
   }
+
+  emaAlphas[yAccel] = 0.9f;
+  emaAlphas[zAccel] = 0.1f;
+  emaAlphas[yGyro]  = 0.1f;
 }
 
 void errorLoop() {
@@ -135,23 +143,7 @@ bool isButtonPressed() {
 }
 
 void checkButton(unsigned long curMillis) {
-  byte buttonPressed = isButtonPressed();
-  if (buttonPressed) {
-    ++buttonHoldLoops;
-    if(buttonHoldLoops * buttonPollInterval >= 2000) {
-      if(buttonHoldFlash <= 0) {
-        confirmationFlash(0);
-        buttonHoldFlash = delayBetweenHoldFlashes;
-      }
-      buttonHoldFlash -= buttonPollInterval;
-    }
-  } else {
-    if (buttonHoldLoops * buttonPollInterval >= 2000) {
-      //resetFunc();
-    }
-    buttonHoldLoops = 0;
-  }
-  
+  byte buttonPressed = isButtonPressed();  
   bool pressed = buttonPressed && !lastButtonState;
   if (pressed) {
     toggleLED();
@@ -161,28 +153,40 @@ void checkButton(unsigned long curMillis) {
 }
 
 void checkIMU(unsigned long curMillis) {
-  if (!IMU.accelerationAvailable()) {
+  if (!IMU.accelerationAvailable() || !IMU.gyroscopeAvailable()) {
     return;
   }
   
-  float x, y, z;
-  IMU.readAcceleration(x, y, z);
-  yAccelEmaLow = (yAccelEmaAlphaLow * y) + ((1 - yAccelEmaAlphaLow) * yAccelEmaLow);
-  yAccelEmaHigh = (yAccelEmaAlphaHigh * y) + ((1 - yAccelEmaAlphaHigh) * yAccelEmaHigh);
-  yAccelLowpass = yAccelEmaLow;
-  yAccelHighpass = y - yAccelEmaHigh;
-  
-  Serial.print(String(abs(yAccelHighpass) * 100) + ",");
-  Serial.println(bonkThreshold * 100);
+  float ax, ay, az;
+  IMU.readAcceleration(ax, ay, az);
+  float gx, gy, gz;
+  IMU.readGyroscope(gx, gy, gz);
 
-/*
-  // Handle tilting to activate the timer
-  if (yAccelLowpass >= tiltThreshold) {
-    tilting = true;
-    if (stableAfterTilt) {
-      stableAfterTilt = false;
-      Serial.println("IMU: Tilting");
+  float readings[] = { ax, ay, az, gx, gy, gz };
+  for (int i = 0; i < 6; ++i) {
+    if (bitRead(lowpassMask, i)) {
+      lowpasses[i] = emaAlphas[i] * readings[i] + (1 - emaAlphas[i]) * lowpasses[i];
+      Serial.print(lowpasses[i]);
+      Serial.print(",");
     }
+    if (bitRead(highpassMask, i)) {
+      highpasses[i] = readings[i] - lowpasses[i];
+      Serial.print(highpasses[i]);
+      Serial.print(",");
+    }
+  }
+  Serial.println();
+  
+  //Serial.print(String(abs(yAccelHighpass) * 100) + ",");
+  //Serial.println(bonkThreshold * 100);
+
+  // Handle tilting forward to activate the timer
+  // Make sure Gyro Y < some threshold (to prevent detection while being held)
+  // Make sure Accel Z > another threshold
+  /*
+  if (yAccelLowpass + 1 >= tiltThreshold) {
+    tilting = true;
+    Serial.println("IMU: Tilting");
     if (tilt >= 0.975f && stableAfterTiming) {
       stableAfterTiming = false;
       startTimer(defaultTimerMillis);
@@ -196,13 +200,14 @@ void checkIMU(unsigned long curMillis) {
     }
     tilting = false;
   }
-*/
+  */
 
   // Handle bonking
-  if (abs(yAccelHighpass) >= bonkThreshold && // Moved enough to trigger a bonk
-      curMillis - bonkDelayTimer >= bonkDelayTimerDefault) { // Enough time has passed since the last bonk
-    Serial.println("IMU: Bonk triggered");
-    toggleLED();
+  if (abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
+    if (curMillis - bonkDelayTimer >= bonkDelayTimerDefault) { // Enough time has passed since the last bonk
+      //Serial.println("IMU: Bonk triggered");
+      toggleLED();
+    }
     bonkDelayTimer = curMillis;
   }
 }
@@ -342,15 +347,4 @@ void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curM
     function(curMillis);
     timer = curMillis;
   }
-}
-
-void printXYZ(float x, float y, float z) {
-  Serial.print("\t");
-  Serial.print(x);
-  Serial.print("\t");
-  Serial.print(y);
-  Serial.print("\t");
-  Serial.print(z);
-  Serial.print("\t");
-  Serial.println(ledState);
 }
