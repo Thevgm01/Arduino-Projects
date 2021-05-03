@@ -25,15 +25,15 @@ byte lastButtonState = 1;
 const byte xAccel = 0, yAccel = 1, zAccel = 2,
            xGyro  = 3, yGyro  = 4, zGyro  = 5;
 const byte highpassMask = 1 << yAccel;
-const byte lowpassMask =  1 << zAccel | highpassMask;
+const byte lowpassMask  = 1 << zAccel | highpassMask;
 const float emaAlphas[] = 
-         { 0.1f,       0.99f,      0.1f,
+         { 0.1f,       0.99f,      0.05f,
            0.1f,       0.1f,       0.1f };
 float highpasses[6], lowpasses[6];
 
 // Bonking
 const float bonkThreshold = 0.001f;
-const unsigned long bonkDelayTimerDefault = 50;
+const unsigned long bonkDelayTimerDefault = 100;
 unsigned long bonkDelayTimer = 0;
 
 // Tilting
@@ -193,7 +193,7 @@ void checkIMU(unsigned long curMillis) {
       printMessage("IMU: Tilting began");
       tilting = true;
     }
-    if (timer == 0) {
+    if (!timer) {
       if (lowpasses[zAccel] >= 0.975f) {
         startTimer(curMillis, defaultTimerMillis);
       } else {
@@ -205,6 +205,7 @@ void checkIMU(unsigned long curMillis) {
     if (tilting) {
       printMessage("IMU: Tilting stopped");
       tilting = false;
+      bonkDelayTimer = curMillis; // Ensure we can't bonk when setting the lamp back down
       if(!timer) {
         setLEDBrightnessInt(ledState);
       }
