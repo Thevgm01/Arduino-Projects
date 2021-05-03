@@ -65,20 +65,24 @@ const String morseTable[] =
 const unsigned long minDelay = 500;
 const unsigned long maxDelay = 4000;
 const unsigned long startReactionTime = 1000;
-const unsigned long minReactionTime = 100;
+const unsigned long reactionTimeChange = 50;
 unsigned long reactionTime = 0;
 unsigned long offTime = 0;
 byte points = 0;
+bool expectedLedState = false;
+bool gaming = false;
 
 // Polling
 const unsigned long IMUPollInterval = 0;         // Every loop
 const unsigned long buttonPollInterval = 50;     // 20 times per second
 const unsigned long timerPollInterval = 500;     // 2 times per second
 const unsigned long bluetoothPollInterval = 200; // 5 times per second
+      unsigned long gamePollInterval = -1;       // Variable
 unsigned long IMUPollStart = 0;
 unsigned long buttonPollStart = 7;
 unsigned long timerPollStart = 13;
 unsigned long bluetoothPollStart = 19;
+unsigned long gamePollStart = 23;
 
 void setup() {
   Serial.begin(9600);
@@ -137,6 +141,7 @@ void loop() {
   awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
   awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
   awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
+  awaitPoll(gamePollStart,      gamePollInterval,      curMillis, &checkGame);
 }
 
 bool isButtonPressed() {
@@ -305,6 +310,47 @@ void checkBluetooth(unsigned long curMillis) {
   if (morseCharacteristic.written()) {
     morseCode(morseCharacteristic.value());
   }
+
+  if (gameCharacteristic.written()) {
+    startGame(curMillis);
+  }
+}
+
+void startGame(unsigned long curMillis) {
+  printMessage("Game: Start");
+  gaming = true;
+  points = -1;
+  gamePollStart = curMillis;
+  gamePollInterval = 0;
+  expectedLedState = true;
+  confirmationFlash(0);
+}
+
+void checkGame(unsigned long curMillis) {
+  printMessage("Game: Check");
+  if (!gaming) {
+    return;
+  }
+  
+  if (ledState && !expectedLedState) { // LED turned on while off, game over
+    gaming = false;
+    gamePollInterval = -1;
+    confirmationFlash(0);
+    gameCharacteristic.writeValue(points);
+    return;
+  } else if (!ledState && expectedLedState) { // LED turned off while on, add point, get harder
+    ++points;
+    reactionTime = startReactionTime - reactionTimeChange * points;
+  } else {
+    toggleLED();
+  }
+
+  expectedLedState = ledState;
+  if (expectedLedState) {
+    gamePollInterval = reactionTime;
+  } else {
+    gamePollInterval = random(minDelay, maxDelay);
+  }
 }
 
 // All these values are hard-coded to feel good, check links for details
@@ -319,7 +365,7 @@ float tiltLightFunc(float x) {
 
 // Spend more time bright, then quickly fade towards the end of the timer
 float timerLightFunc(float x) {
-  float cutoff = 1/3.0f;
+  const float cutoff = 1/3.0f;
   return x < cutoff ? tiltLightFunc(x / cutoff) : 1;
 }
 
