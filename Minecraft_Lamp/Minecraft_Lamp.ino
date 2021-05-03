@@ -13,9 +13,9 @@ int ledState = 0;
 const int confirmationDelay = 100;
 const int errorDelay = 500;
 
-int ignoreFirstIMULoops = 100;
+int ignoreFirstIMULoops = 50;
 
-const bool printMessages = true, printGraphs = false;
+const bool printMessages = false, printGraphs = true;
 
 // Button presses
 const int buttonPin = 5;
@@ -24,16 +24,15 @@ byte lastButtonState = 1;
 // IMU
 const byte xAccel = 0, yAccel = 1, zAccel = 2,
            xGyro  = 3, yGyro  = 4, zGyro  = 5;
-const byte smoothedHighpassMask = 1 << zGyro;
-const byte highpassMask = 1 << yAccel | smoothedHighpassMask;
+const byte highpassMask = 1 << yAccel;
 const byte lowpassMask =  1 << zAccel | highpassMask;
 const float emaAlphas[] = 
-         { 0.1f,       0.9f,       0.1f,
-           0.1f,       0.1f,       0.03f };
-float smoothedHighpasses[6], highpasses[6], lowpasses[6];
+         { 0.1f,       0.99f,      0.1f,
+           0.1f,       0.1f,       0.1f };
+float highpasses[6], lowpasses[6];
 
 // Bonking
-const float bonkThreshold = 0.05f;
+const float bonkThreshold = 0.001f;
 const unsigned long bonkDelayTimerDefault = 50;
 unsigned long bonkDelayTimer = 0;
 
@@ -90,6 +89,8 @@ void setup() {
 
   //pinMode(ledPin, OUTPUT); // Not needed because of analogWrite
   pinMode(buttonPin, INPUT_PULLUP);
+  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(LED_PWR, LOW);
 
   // Bluetooth initialization
   if (!BLE.begin()) {
@@ -162,30 +163,23 @@ void checkIMU(unsigned long curMillis) {
   if (!IMU.accelerationAvailable() || !IMU.gyroscopeAvailable()) {
     return;
   }
-  
-  float ax, ay, az;
-  IMU.readAcceleration(ax, ay, az);
-  float gx, gy, gz;
-  IMU.readGyroscope(gx, gy, gz);
 
-  float readings[] = { ax, ay, az, gx, gy, gz };
+  float readings[6];
+  IMU.readAcceleration(readings[0], readings[1], readings[2]);
+  IMU.readGyroscope(readings[3], readings[4], readings[5]);
+
   for (int i = 0; i < 6; ++i) {
     if (bitRead(lowpassMask, i)) {
       lowpasses[i] = emaAlphas[i] * readings[i] + (1 - emaAlphas[i]) * lowpasses[i];
-      printGraph(lowpasses[i]);
     }
     if (bitRead(highpassMask, i)) {
       highpasses[i] = readings[i] - lowpasses[i];
-      printGraph(highpasses[i]);
-    }
-    if (bitRead(smoothedHighpassMask, i)) {
-      smoothedHighpasses[i] = emaAlphas[i] * abs(highpasses[i]) + (1 - emaAlphas[i]) * smoothedHighpasses[i];
-      printGraph(smoothedHighpasses[i]);
     }
   }
   if (printGraphs) {
     Serial.println();
   }
+
 
   // Wait for the initial values to settle down
   if (ignoreFirstIMULoops > 0) {
@@ -194,9 +188,7 @@ void checkIMU(unsigned long curMillis) {
   }
 
   // Handle tilting forward to activate the timer
-  // Make sure Gyro Z < some threshold (to prevent detection while being held)
-  // Make sure Accel Z > another threshold
-  if (lowpasses[zAccel] >= tiltThreshold && smoothedHighpasses[zGyro] < tiltHandheldThreshold) {
+  if (lowpasses[zAccel] >= tiltThreshold) {
     if (!tilting) {
       printMessage("IMU: Tilting began");
       tilting = true;
@@ -317,17 +309,16 @@ void checkBluetooth(unsigned long curMillis) {
 }
 
 void startGame(unsigned long curMillis) {
-  printMessage("Game: Start");
   gaming = true;
   points = -1;
   gamePollStart = curMillis;
   gamePollInterval = 0;
   expectedLedState = true;
+  printMessage("Game: Start");
   confirmationFlash(0);
 }
 
 void checkGame(unsigned long curMillis) {
-  printMessage("Game: Check");
   if (!gaming) {
     return;
   }
@@ -335,12 +326,15 @@ void checkGame(unsigned long curMillis) {
   if (ledState && !expectedLedState) { // LED turned on while off, game over
     gaming = false;
     gamePollInterval = -1;
+    printMessage("Game: Finished with " + String(points) + " points");
     confirmationFlash(0);
-    gameCharacteristic.writeValue(points);
     return;
   } else if (!ledState && expectedLedState) { // LED turned off while on, add point, get harder
     ++points;
+    gameCharacteristic.writeValue(points);
     reactionTime = startReactionTime - reactionTimeChange * points;
+    printMessage("Game: " + String(points) + " points");
+    printMessage("Game: " + String(gamePollInterval) + " ms reaction time ");
   } else {
     toggleLED();
   }
@@ -351,6 +345,8 @@ void checkGame(unsigned long curMillis) {
   } else {
     gamePollInterval = random(minDelay, maxDelay);
   }
+
+  printMessage("Game: Wait for " + String(gamePollInterval) + " ms");
 }
 
 // All these values are hard-coded to feel good, check links for details
