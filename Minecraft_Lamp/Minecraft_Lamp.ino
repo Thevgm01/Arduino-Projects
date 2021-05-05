@@ -32,7 +32,7 @@ const float emaAlphas[] =
 float highpasses[6], lowpasses[6];
 
 // Bonking
-const float bonkThreshold = 0.001f;
+const float bonkThreshold = 0.003f;
 const unsigned long bonkDelayTimerDefault = 100;
 unsigned long bonkDelayTimer = 0;
 
@@ -188,28 +188,10 @@ void checkIMU(unsigned long curMillis) {
   }
 
   // Handle tilting forward to activate the timer
-  if (lowpasses[zAccel] >= tiltThreshold) {
-    if (!tilting) {
-      printMessage("IMU: Tilting began");
-      tilting = true;
-    }
-    if (!timer) {
-      if (lowpasses[zAccel] >= 0.975f) {
-        startTimer(curMillis, defaultTimerMillis);
-      } else {
-        float frac = tiltLightFunc(lowpasses[zAccel]);
-        setLEDBrightnessFloat(frac);
-      }
-    }
-  } else {
-    if (tilting) {
-      printMessage("IMU: Tilting stopped");
-      tilting = false;
-      bonkDelayTimer = curMillis; // Ensure we can't bonk when setting the lamp back down
-      if(!timer) {
-        setLEDBrightnessInt(ledState);
-      }
-    }
+  if (lowpasses[zAccel] >= 0.975f && !timer) {
+    startTimer(curMillis, defaultTimerMillis);
+  } else if (lowpasses[zAccel] >= tiltThreshold) {
+    bonkDelayTimer = curMillis; // Ensure we can't bonk when setting the lamp back down
   }
 
   // Handle bonking
