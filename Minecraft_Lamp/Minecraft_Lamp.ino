@@ -15,7 +15,7 @@ const int errorDelay = 500;
 
 int ignoreFirstIMULoops = 50;
 
-const bool printMessages = false, printGraphs = true;
+const bool printMessages = false, printGraphs = false;
 
 // Button presses
 const int buttonPin = 5;
@@ -72,16 +72,11 @@ bool expectedLedState = false;
 bool gaming = false;
 
 // Polling
-const unsigned long IMUPollInterval = 0;         // Every loop
-const unsigned long buttonPollInterval = 50;     // 20 times per second
-const unsigned long timerPollInterval = 500;     // 2 times per second
-const unsigned long bluetoothPollInterval = 200; // 5 times per second
-      unsigned long gamePollInterval = -1;       // Variable
-unsigned long IMUPollStart = 0;
-unsigned long buttonPollStart = 7;
-unsigned long timerPollStart = 13;
-unsigned long bluetoothPollStart = 19;
-unsigned long gamePollStart = 23;
+const byte IMU = 0, BUTTON = 1, TIMER = 2, BLUETOOTH = 3, GAME = 4, 
+           BONK = 5;
+unsigned long pollTimers[6];
+unsigned long pollLengths[6];
+void (*pollFunctions[5])(unsigned long curMillis);
 
 void setup() {
   Serial.begin(9600);
@@ -127,6 +122,11 @@ void setup() {
     errorLoop();
   }
 
+  pollFunctions[IMU] = checkBluetooth;
+  pollFunctions[BUTTON] = checkButton;
+  pollFunctions[TIMER] = checkTimer;
+  pollFunctions[BLUETOOTH] = checkBluetooth;
+  pollFunctions[GAME] = checkGame;
 }
 
 void errorLoop() {
@@ -138,11 +138,11 @@ void errorLoop() {
 
 void loop() {
   unsigned long curMillis = millis();
-  awaitPoll(IMUPollStart,       IMUPollInterval,       curMillis, &checkIMU);
-  awaitPoll(bluetoothPollStart, bluetoothPollInterval, curMillis, &checkBluetooth);
-  awaitPoll(buttonPollStart,    buttonPollInterval,    curMillis, &checkButton);
-  awaitPoll(timerPollStart,     timerPollInterval,     curMillis, &checkTimer);
-  awaitPoll(gamePollStart,      gamePollInterval,      curMillis, &checkGame);
+  awaitPoll(IMU,       curMillis);
+  awaitPoll(BUTTON,    curMillis);
+  awaitPoll(TIMER,     curMillis);
+  awaitPoll(BLUETOOTH, curMillis);
+  awaitPoll(GAME,      curMillis);
 }
 
 bool isButtonPressed() {
@@ -152,6 +152,7 @@ bool isButtonPressed() {
 void checkButton(unsigned long curMillis) {
   byte buttonState = isButtonPressed();  
   bool pressed = buttonState && !lastButtonState;
+  bool released = !buttonState && lastButtonState;
   if (pressed) {
     toggleLED();
   }
@@ -180,7 +181,6 @@ void checkIMU(unsigned long curMillis) {
     Serial.println();
   }
 
-
   // Wait for the initial values to settle down
   if (ignoreFirstIMULoops > 0) {
     --ignoreFirstIMULoops;
@@ -191,23 +191,23 @@ void checkIMU(unsigned long curMillis) {
   if (lowpasses[zAccel] >= 0.975f && !timer) {
     startTimer(curMillis, defaultTimerMillis);
   } else if (lowpasses[zAccel] >= tiltThreshold) {
-    bonkDelayTimer = curMillis; // Ensure we can't bonk when setting the lamp back down
+    resetPoll(BONK, curMillis); // Ensure we can't bonk when setting the lamp back down
   }
 
   // Handle bonking
   if (!tilting && abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
-    if (curMillis - bonkDelayTimer >= bonkDelayTimerDefault) { // Enough time has passed since the last bonk
+    if (checkPoll(BONK, curMillis)) { // Enough time has passed since the last bonk
       printMessage("IMU: Bonk triggered");
       toggleLED();
     }
-    bonkDelayTimer = curMillis;
+    resetPoll(BONK, curMillis);
   }
 }
 
+
 void startTimer(unsigned long curMillis, unsigned long millisToWait) {
   confirmationFlash(1);
-  timerMillis = millisToWait;
-  timer = curMillis;
+  timer = millisToWait;
   printMessage("Timer: Start");
 }
 
@@ -354,7 +354,7 @@ void setLEDBrightnessInt(int val) {
 }
 
 void setLEDBrightnessFloat(float frac) {
-  setLEDBrightnessInt(round(constrain(frac * 255, 0, 255)));
+  setLEDBrightnessInt(round(constrain(frac, 0, 1) * 255));
 }
 
 void toggleLED() {
@@ -375,10 +375,22 @@ void confirmationFlash(int desiredState) {
   }
 }
 
-void awaitPoll(unsigned long & timer, unsigned long interval, unsigned long curMillis, void (*function)(unsigned long)) {
-  if (curMillis - timer >= interval) {
-    function(curMillis);
-    timer = curMillis;
+bool checkPoll(int index, unsigned long curMillis) {
+  return curMillis - pollTimers[index] >= pollLengths[index];
+}
+
+void resetPoll(int index, unsigned long curMillis) {
+  pollTimers[index] = curMillis;
+}
+
+void setPollTime(int index, unsigned long pollMillis) {
+  pollLengths[index] = pollMillis;
+}
+
+void awaitFunctionPoll(int index, unsigned long curMillis) {
+  if (checkPoll(index, curMillis)) {
+    (*pollFunctions[index])(curMillis);
+    resetPoll(index, curMillis);
   }
 }
 
