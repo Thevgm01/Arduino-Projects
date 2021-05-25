@@ -1,15 +1,17 @@
 #include <Arduino_LSM9DS1.h>
 #include <ArduinoBLE.h>
 
-BLEService ledService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Service
+BLEService LEDService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Service
 
 BLEByteCharacteristic toggleCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLEWrite);
-BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLENotify | BLEWrite);
+BLEByteCharacteristic valueCharacteristic("19B10005-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
+BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLEWrite);
 BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
 BLEByteCharacteristic gameCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
 
-const int ledPin = 3;
-int ledState = 0;
+const int LEDPin = 3;
+int LEDValue = 0;
+int maxLEDValue = 255;
 const int confirmationDelay = 100;
 const int errorDelay = 500;
 
@@ -63,7 +65,7 @@ const unsigned long startReactionTime = 1000;
 const unsigned long reactionTimeChange = 50;
 unsigned long reactionTime = 0;
 byte points = 0;
-bool expectedLedState = false;
+bool expectedLEDValue = false;
 bool gaming = false;
 
 // Polling
@@ -91,29 +93,30 @@ void setup() {
   Serial.begin(9600);
   //while (!Serial);
 
-  //pinMode(ledPin, OUTPUT); // Not needed because of analogWrite
+  //pinMode(LEDPin, OUTPUT); // Not needed because of analogWrite
   pinMode(buttonPin, INPUT_PULLUP);
   digitalWrite(LED_BUILTIN, LOW);
   digitalWrite(LED_PWR, LOW);
 
   // Bluetooth initialization
   if (!BLE.begin()) {
-    Serial.println("Starting BLE failed!");
+    Serial.println("Starting BLE faiLED!");
     errorLoop();
   }
 
   // set advertised local name and service UUID:
   BLE.setLocalName("Minecraft Lamp");
-  BLE.setAdvertisedService(ledService);
+  BLE.setAdvertisedService(LEDService);
 
   // add the characteristics to the service
-  ledService.addCharacteristic(toggleCharacteristic);
-  ledService.addCharacteristic(timerCharacteristic);
-  ledService.addCharacteristic(morseCharacteristic);
-  ledService.addCharacteristic(gameCharacteristic);
+  LEDService.addCharacteristic(toggleCharacteristic);
+  LEDService.addCharacteristic(valueCharacteristic);
+  LEDService.addCharacteristic(timerCharacteristic);
+  LEDService.addCharacteristic(morseCharacteristic);
+  LEDService.addCharacteristic(gameCharacteristic);
 
   // Add service
-  BLE.addService(ledService);
+  BLE.addService(LEDService);
 
   // Set the initial value for the characeristic:
   //toggleCharacteristic.writeValue(0);
@@ -127,7 +130,7 @@ void setup() {
 
   // IMU initialization
   if (!IMU.begin()) {
-    Serial.println("Failed to initialize IMU!");
+    Serial.println("FaiLED to initialize IMU!");
     errorLoop();
   }
 
@@ -163,6 +166,7 @@ void checkButton(unsigned long curMillis) {
   bool pressed = buttonState && !lastButtonState;
   bool released = !buttonState && lastButtonState;
   if (pressed) {
+    maxLEDValue = 255;
     toggleLED();
   }
   lastButtonState = buttonState;
@@ -235,7 +239,7 @@ void checkTimer(unsigned long curMillis) {
 }
 
 void morseCode(String str) {
-  byte originalState = ledState;
+  byte originalState = LEDValue;
   confirmationFlash(0);
   delay(1000);
 
@@ -287,6 +291,13 @@ void checkBluetooth(unsigned long curMillis) {
     toggleLED();
   }
 
+  if (valueCharacteristic.written()) {
+    maxLEDValue = valueCharacteristic.value();
+    setLEDBrightnessInt(maxLEDValue);
+  } else if (valueCharacteristic.value() != LEDValue) {
+    valueCharacteristic.writeValue(LEDValue);
+  }
+
   if (timerCharacteristic.written()) {
     unsigned long millisToWait = (long)timerCharacteristic.value() * 60 * 1000;
     startTimer(curMillis, millisToWait);
@@ -303,10 +314,10 @@ void checkBluetooth(unsigned long curMillis) {
 
 void startGame(unsigned long curMillis) {
   gaming = true;
-  points = -1;
+  points = 0;
   gamePollStart = curMillis;
   gamePollInterval = 0;
-  expectedLedState = true;
+  expectedLEDValue = true;
   printMessage("Game: Start");
   confirmationFlash(0);
 }
@@ -316,13 +327,13 @@ void checkGame(unsigned long curMillis) {
     return;
   }
   
-  if (ledState && !expectedLedState) { // LED turned on while off, game over
+  if (LEDValue && !expectedLEDValue) { // LED turned on while off, game over
     gaming = false;
     gamePollInterval = -1;
     printMessage("Game: Finished with " + String(points) + " points");
     confirmationFlash(0);
     return;
-  } else if (!ledState && expectedLedState) { // LED turned off while on, add point, get harder
+  } else if (!LEDValue && expectedLEDValue) { // LED turned off while on, add point, get harder
     ++points;
     gameCharacteristic.writeValue(points);
     reactionTime = startReactionTime - reactionTimeChange * points;
@@ -332,8 +343,8 @@ void checkGame(unsigned long curMillis) {
     toggleLED();
   }
 
-  expectedLedState = ledState;
-  if (expectedLedState) {
+  expectedLEDValue = LEDValue;
+  if (expectedLEDValue) {
     gamePollInterval = reactionTime;
   } else {
     gamePollInterval = random(minDelay, maxDelay);
@@ -347,7 +358,7 @@ void checkGame(unsigned long curMillis) {
 
 // https://www.desmos.com/calculator/in73bophjw
 // Spend more time dim to counteract the logarithmic nature of light while tilting
-float tiltLightFunc(float x) {
+float tanLightFunc(float x) {
   const float a = 0.5f, b = 0.45f, c = 0.025f;
   return a * tan(b * PI * x) / PI - c;
 }
@@ -355,11 +366,11 @@ float tiltLightFunc(float x) {
 // Spend more time bright, then quickly fade towards the end of the timer
 float timerLightFunc(float x) {
   const float cutoff = 1/3.0f;
-  return x < cutoff ? tiltLightFunc(x / cutoff) : 1;
+  return x < cutoff ? tanLightFunc(x / cutoff) : 1;
 }
 
 void setLEDBrightnessInt(int val) {
-  analogWrite(ledPin, val);
+  analogWrite(LEDPin, val);
   printMessage("LED Brightness: " + String(val));
 }
 
@@ -368,8 +379,8 @@ void setLEDBrightnessFloat(float frac) {
 }
 
 void toggleLED() {
-  ledState = 255 - ledState;
-  setLEDBrightnessInt(ledState);
+  LEDValue = LEDValue ? 0 : maxLEDValue;
+  setLEDBrightnessInt(LEDValue);
   timer = 0;
 }
 
@@ -378,7 +389,7 @@ void confirmationFlash(int desiredState) {
   //         Cur on  Cur off
   // New on    6       5
   // New off   5       6
-  int startState = 0 || ledState; // Account for the fact that ledState is 0 or 255
+  int startState = 0 || LEDValue; // Account for the fact that LEDValue is 0 or 255
   for (int i = 0; i < 6 - abs(startState - desiredState); ++i) {
     toggleLED();
     delay(confirmationDelay);
@@ -393,7 +404,7 @@ void resetPoll(int index, unsigned long curMillis) {
   pollTimers[index] = curMillis;
 }
 
-void setPollTime(int index, unsigned long pollMillis) {
+void setPollLength(int index, unsigned long pollMillis) {
   pollLengths[index] = pollMillis;
 }
 
