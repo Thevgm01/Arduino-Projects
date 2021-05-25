@@ -38,13 +38,9 @@ unsigned long bonkDelayTimer = 0;
 
 // Tilting
 const float tiltThreshold = 0.1f;
-const float tiltHandheldThreshold = 2.0f;
-bool tilting = false;
 
 // Timing
-const unsigned long defaultTimerMillis = 15 * 60 * 1000;
-unsigned long timerMillis = defaultTimerMillis;
-unsigned long timer = 0;
+const unsigned long defaultTimerMillis = 15 * 60 * 1000; // 15 minutes
 
 // Morse code
 const int morseDelay = 100;
@@ -66,7 +62,6 @@ const unsigned long maxDelay = 4000;
 const unsigned long startReactionTime = 1000;
 const unsigned long reactionTimeChange = 50;
 unsigned long reactionTime = 0;
-unsigned long offTime = 0;
 byte points = 0;
 bool expectedLedState = false;
 bool gaming = false;
@@ -74,8 +69,22 @@ bool gaming = false;
 // Polling
 const byte IMU = 0, BUTTON = 1, TIMER = 2, BLUETOOTH = 3, GAME = 4, 
            BONK = 5;
-unsigned long pollTimers[6];
-unsigned long pollLengths[6];
+unsigned long pollTimers[] = {
+  0,  // IMU
+  5,  // BUTTON
+  10, // TIMER
+  15, // BLUETOOTH
+  0,  // GAME
+  0   // BONK
+};
+unsigned long pollLengths[] = {
+  0,  // IMU (every loop)
+  50, // BUTTON (20 times per second)
+  33, // TIMER (30 times per second)
+  200,// BLUETOOTH (5 times per second)
+  -1, // GAME (variable)
+  100 // BONK (1/10th of a second)
+};
 void (*pollFunctions[5])(unsigned long curMillis);
 
 void setup() {
@@ -195,7 +204,7 @@ void checkIMU(unsigned long curMillis) {
   }
 
   // Handle bonking
-  if (!tilting && abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
+  if (abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
     if (checkPoll(BONK, curMillis)) { // Enough time has passed since the last bonk
       printMessage("IMU: Bonk triggered");
       toggleLED();
@@ -207,7 +216,8 @@ void checkIMU(unsigned long curMillis) {
 
 void startTimer(unsigned long curMillis, unsigned long millisToWait) {
   confirmationFlash(1);
-  timer = millisToWait;
+  timer = curMillis;
+  timerMillis = millisToWait;
   printMessage("Timer: Start");
 }
 
