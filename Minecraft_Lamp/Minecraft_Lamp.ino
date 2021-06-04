@@ -17,12 +17,12 @@ const int errorDelay = 500;
 
 int ignoreFirstIMU_CHECKLoops = 50;
 
-const bool printMessages = true, printGraphs = false;
+const bool printMessages = false, printGraphs = false;
 
 // Button presses
 const int buttonPin = 5;
 byte lastButtonState = 1;
-int startCycleValue = 0;
+float startCycleValue = 0.0f;
 
 // IMU_CHECK
 const byte xAccel = 0, yAccel = 1, zAccel = 2,
@@ -173,16 +173,16 @@ void checkButton(const unsigned long curMillis) {
   if (pressed) {
     maxLEDValue = 255;
     toggleLED();
+    startCycleValue = asin(map(LEDValue, 0, 255, -1, 1));
     resetPoll(BUTTON_HELD, curMillis);
-    startCycleValue = LEDValue;
   } else if (buttonState && checkPoll(BUTTON_HELD, curMillis)) {
-    unsigned long diffMillis = getPollTimeDiff(BUTTON_HELD, curMillis);
-    diffMillis = pollLengths[BUTTON_HELD] - diffMillis;
-    maxLEDValue = sin(startCycleValue + diffMillis / 2000 * 255 / PI) * 255;
+    unsigned long holdTime = getPollTimeDiff(BUTTON_HELD, curMillis) - pollLengths[BUTTON_HELD];
+    float sinValue = sin(startCycleValue + ((float)holdTime / 255 / PI));
+    float newLEDFrac = (sinValue + 1) / 2; //map(sinValue, -1, 1, 0, 1);
+    maxLEDValue = round(newLEDFrac * 255);
     setLEDBrightnessInt(maxLEDValue);
   }
   lastButtonState = buttonState;
-
 }
 
 void checkIMU(const unsigned long curMillis) {
@@ -213,7 +213,7 @@ void checkIMU(const unsigned long curMillis) {
   }
 
   // Handle tilting forward to activate the timer
-  if (lowpasses[zAccel] >= 0.975f && isTiming()) {
+  if (lowpasses[zAccel] >= 0.975f && !isTiming()) {
     startTimer(curMillis, defaultTimerMillis);
   } else if (lowpasses[zAccel] >= tiltThreshold) {
     resetPoll(BONK_DELAY, curMillis); // Ensure we can't bonk when setting the lamp back down
@@ -249,7 +249,7 @@ void checkTimer(const unsigned long curMillis) {
       float frac = timerLightFunc(((float)pollLengths[TIMER_ACTUAL] - diffMillis) / pollLengths[TIMER_ACTUAL]);
       setLEDBrightnessFloat(frac);
     } else {
-      toggleLED(); // Automatically sets timer to 0
+      setPollLength(TIMER_ACTUAL, 0);
     }
   }
 }
@@ -305,7 +305,6 @@ void checkBluetooth(const unsigned long curMillis) {
 
   if (valueCharacteristic.written()) {
     maxLEDValue = valueCharacteristic.value();
-    LEDValue = maxLEDValue;
     setLEDBrightnessInt(maxLEDValue);
   } else if (valueCharacteristic.value() != LEDValue) {
     valueCharacteristic.writeValue(LEDValue);
@@ -385,6 +384,7 @@ float timerLightFunc(float x) {
 }
 
 void setLEDBrightnessInt(int val) {
+  LEDValue = val;
   analogWrite(LEDPin, val);
   printMessage("LED Brightness: " + String(val));
 }
@@ -394,8 +394,7 @@ void setLEDBrightnessFloat(float frac) {
 }
 
 void toggleLED() {
-  LEDValue = LEDValue ? 0 : maxLEDValue;
-  setLEDBrightnessInt(LEDValue);
+  setLEDBrightnessInt(LEDValue ? 0 : maxLEDValue);
   pollLengths[TIMER_ACTUAL] = 0;
 }
 
@@ -437,13 +436,13 @@ void awaitFunctionPoll(int index, const unsigned long curMillis) {
 }
 
 void printMessage(String message) {
-  if (printMessages) {
+  if (Serial && printMessages) {
     Serial.println(message);
   }
 }
 
 void printGraph(float number) {
-  if (printGraphs) {
+  if (Serial && printGraphs) {
     Serial.print(String(number) + ",");
   }
 }
