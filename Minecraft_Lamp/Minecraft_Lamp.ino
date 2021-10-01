@@ -3,11 +3,11 @@
 
 BLEService LEDService("19B10000-E8F2-537E-4F6C-D104768A1214"); // BLE LED Service
 
-BLEByteCharacteristic toggleCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLEWrite);
-BLEByteCharacteristic valueCharacteristic("19B10005-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
-BLEUnsignedIntCharacteristic timerCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLEWrite);
-BLEStringCharacteristic morseCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 256);
-BLEByteCharacteristic gameCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
+BLEByteCharacteristic toggleCharacteristic("3A00", BLEWrite);
+BLEByteCharacteristic valueCharacteristic("3A10", BLERead | BLEWrite);
+BLEUnsignedIntCharacteristic timerCharacteristic("3A20", BLEWrite);
+BLEStringCharacteristic morseCharacteristic("3A30", BLEWrite, 256);
+BLEByteCharacteristic gameCharacteristic("3A40", BLERead | BLEWrite);
 
 const int LEDPin = 3;
 int LEDValue = 0;
@@ -40,7 +40,8 @@ const unsigned long bonkDelayTimerDefault = 100;
 unsigned long bonkDelayTimer = 0;
 
 // Tilting
-const float tiltThreshold = 0.1f;
+const float tiltStartThreshold = 0.1f;
+const float tiltEndThreshold = 0.975f;
 
 // Timing
 const unsigned long defaultTimerMillis = 15 * 60 * 1000; // 15 minutes
@@ -160,6 +161,7 @@ void loop() {
   awaitFunctionPoll(TIMER_CHECK,     curMillis);
   awaitFunctionPoll(BLUETOOTH_CHECK, curMillis);
   awaitFunctionPoll(GAME_CHECK,      curMillis);
+  delay(10);
 }
 
 bool isButtonPressed() {
@@ -213,9 +215,9 @@ void checkIMU(const unsigned long curMillis) {
   }
 
   // Handle tilting forward to activate the timer
-  if (lowpasses[zAccel] >= 0.975f && !isTiming()) {
+  if (lowpasses[zAccel] >= tiltEndThreshold && !isTiming()) {
     startTimer(curMillis, defaultTimerMillis);
-  } else if (lowpasses[zAccel] >= tiltThreshold) {
+  } else if (lowpasses[zAccel] >= tiltStartThreshold) {
     resetPoll(BONK_DELAY, curMillis); // Ensure we can't bonk when setting the lamp back down
   }
 
