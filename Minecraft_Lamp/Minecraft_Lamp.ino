@@ -6,15 +6,26 @@
 // Forward Declarations //
 //////////////////////////
 namespace Debug {
+  const bool printMessages = false;
+  const bool printGraphs = true;
+  
   void printText(String message);
   void printGraph(float number);
+  void finishGraph();
   void setup();
 }
 
 namespace LED {
+  const int ANALOG_RESOLUTION = 12;
+  const int MAX_BRIGHTNESS = (1 << ANALOG_RESOLUTION) - 1;
+  
+  int curBrightness = 0;
+  int variableMaxBrightness = MAX_BRIGHTNESS;
+  
   void setBrightnessInt(int val);
   void setBrightnessFloat(float frac);
   void toggle();
+  void smartToggle();
   void confirmationFlash(int desiredState);
   void errorLoop();
   bool setup();
@@ -27,12 +38,19 @@ namespace Button {
 }
 
 namespace Sensors {
+  const float bonkThreshold = 0.003f;
+  const float chargeThreshold = 0.03f;
+  float bonkLowpassEma = 0.99f;
+  float chargeLowpassEma = 0.95f;
+  float chargeBandpassEma = 0.2f;
+  
   void setup();
   void update();
 }
 
 namespace Timer {
   const unsigned long defaultLength = 15 * 60 * 1000; // 15 minutes
+  const unsigned long shortLength = 2 * 60 * 1000; // 2 minutes
   
   void start(unsigned long millisToWait);
   bool isTiming();
@@ -57,12 +75,23 @@ namespace Game {
   void update();
 }
 
-enum class PollType { SENSORS, BUTTON, TIMER, BLUETOOTH, GAME, BONK_DELAY, BUTTON_HOLD, TIMER_ACTUAL };
+enum class PollType { SENSORS, BUTTON, TIMER, BLUETOOTH, GAME, BONK_DELAY, BONK_CHARGE, BUTTON_HOLD, TIMER_ACTUAL };
 
+struct PollData {
+  PollData() : startMillis(0), lengthMillis(0), update(NULL) {}
+  PollData(unsigned long ltm, unsigned long lm, void (*u)()) : startMillis(ltm), lengthMillis(lm), update(u) {}
+  
+  unsigned long startMillis; // Offset some of these by a small amount so they don't all run on the same cycle
+  unsigned long lengthMillis;
+  void (*update)();
+};
+  
 namespace Polling {
+  unsigned long curMillis;
+
   unsigned long getPollElapsedMillis(PollType type);
   unsigned long getPollRemainingMillis(PollType type);
-  unsigned long getPollLengthMillis(PollType type);
+  PollData& getData(PollType type);
   bool checkPoll(PollType type);
   void resetPoll(PollType type);
   bool isActive(PollType type);
@@ -74,10 +103,7 @@ namespace Polling {
 // Definitions //
 /////////////////
 namespace Debug {
-  const bool printMessages = false;
-  const bool printGraphs = false;
-
-  const int awaitingSerialDelayMillis = 1000;
+  const int awaitingSerialDelayMillis = 200;
   
   void printText(String message) {
     if (Serial && printMessages) {
@@ -85,14 +111,20 @@ namespace Debug {
     }
   }
   
-  void printGraph(float number) {
+  void printGraph(String name, float number) {
     if (Serial && printGraphs) {
-      Serial.print(String(number) + ",");
+      Serial.print(name + ":" + String(number) + ",");
+    }
+  }
+
+  void finishGraph() {
+    if (Serial && printGraphs) {
+      Serial.println();
     }
   }
 
   void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
   
     while ((printMessages || printGraphs) && !Serial) {
       LED::toggle();
@@ -103,15 +135,11 @@ namespace Debug {
 
 namespace LED {
   const int PIN = 3;
-  const int ANALOG_RESOLUTION = 12;
-  const int MAX_BRIGHTNESS = (1 << ANALOG_RESOLUTION) - 1;
-  
-  int curBrightness = 0;
-  int variableMaxBrightness = MAX_BRIGHTNESS;
   
   const int confirmationDelayMillis = 100;
   const int errorDelayMillis = 500;
-  
+  const float smartToggleThreshold = 0.6f;
+
   void setBrightnessInt(int val) {
     curBrightness = val;
     analogWrite(PIN, val);
@@ -125,6 +153,16 @@ namespace LED {
   void toggle() {
     setBrightnessInt(curBrightness ? 0 : variableMaxBrightness);
     Timer::stop();
+  }
+
+  void smartToggle() {
+    if ((float)curBrightness / variableMaxBrightness > smartToggleThreshold) {
+      Timer::stop();
+      toggle();
+    }
+    else {
+      Timer::start(Timer::defaultLength);
+    }
   }
   
   void confirmationFlash(int desiredState) {
@@ -173,13 +211,13 @@ namespace Button {
     bool released = !buttonState && lastButtonState;
     if (pressed) {
       LED::variableMaxBrightness = LED::MAX_BRIGHTNESS;
-      LED::toggle();
+      LED::smartToggle();
       startCycleValue = asin(map(LED::curBrightness, 0, LED::MAX_BRIGHTNESS, -1, 1));
       Polling::resetPoll(PollType::BUTTON_HOLD);
     } else if (buttonState && Polling::checkPoll(PollType::BUTTON_HOLD)) {
       unsigned long holdTime = 
         Polling::getPollElapsedMillis(PollType::BUTTON_HOLD) - 
-        Polling::getPollLengthMillis(PollType::BUTTON_HOLD); // Ignore the first second of holding
+        Polling::getData(PollType::BUTTON_HOLD).lengthMillis; // Ignore the first second of holding
       float sinValue = sin(startCycleValue + (holdTime / 800.0f));
       float newBrightnessFrac = (sinValue + 1) / 2; //map(sinValue, -1, 1, 0, 1);
       LED::variableMaxBrightness = round(newBrightnessFrac * LED::MAX_BRIGHTNESS);
@@ -192,21 +230,17 @@ namespace Button {
 namespace Sensors {
   unsigned int ignoreLoops = 50;
   
-  const byte xAccel = 0, yAccel = 1, zAccel = 2,
-             xGyro  = 3, yGyro  = 4, zGyro  = 5;
-  const byte highpassMask = 1 << yAccel;
-  const byte lowpassMask  = 1 << zAccel | highpassMask;
-  const float emaAlphas[] = 
-           { 0.1f,       0.99f,      0.05f,
-             0.1f,       0.1f,       0.1f };
-  float highpasses[6], lowpasses[6];
-  
+  enum { xAccel, yAccel, zAccel,
+         xGyro, yGyro, zGyro };
+
   // Bonking
-  const float bonkThreshold = 0.003f;
-  
-  // Tilting
-  const float tiltStartThreshold = 0.1f;
-  const float tiltEndThreshold = 0.975f;
+  float bonkLowpass;
+  float bonkHighpass;
+
+  // Charging
+  float chargeLowpass;
+  float chargeHighpass;
+  float chargeBandpass;
 
   void setup() {
     if (!IMU.begin()) {
@@ -223,46 +257,59 @@ namespace Sensors {
     float readings[6];
     IMU.readAcceleration(readings[0], readings[1], readings[2]);
     IMU.readGyroscope(readings[3], readings[4], readings[5]);
+
+    // Handle bonking
+    bonkLowpass = bonkLowpassEma * abs(readings[yAccel]) + (1 - bonkLowpassEma) * bonkLowpass;
+    bonkHighpass = abs(abs(readings[yAccel]) - bonkLowpass);
   
-    for (int i = 0; i < 6; ++i) {
-      if (bitRead(lowpassMask, i)) {
-        lowpasses[i] = emaAlphas[i] * readings[i] + (1 - emaAlphas[i]) * lowpasses[i];
+    if (ignoreLoops == 0 && 
+        abs(bonkHighpass) >= bonkThreshold && // Moved enough to trigger a bonk, 
+        abs(chargeBandpass) < chargeThreshold) { // Not charging
+      if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
+        Debug::printText("Sensors: Bonk triggered");
+        LED::smartToggle();
       }
-      if (bitRead(highpassMask, i)) {
-        highpasses[i] = readings[i] - lowpasses[i];
+      Polling::resetPoll(PollType::BONK_DELAY);
+    }
+
+    // Handle charging
+    if (Polling::checkPoll(PollType::BONK_DELAY)) {
+      float chargeSum = abs(readings[xAccel]) + abs(readings[yAccel]) + abs(readings[zAccel]);
+      chargeLowpass = chargeLowpassEma * chargeSum + (1 - chargeLowpassEma) * chargeLowpass;
+      chargeHighpass = abs(chargeSum - chargeLowpass);
+      chargeBandpass = chargeBandpassEma * chargeHighpass + (1 - chargeBandpassEma) * chargeBandpass;
+  
+      if (ignoreLoops == 0 &&
+          abs(chargeBandpass) >= chargeThreshold) { // Charging
+        Debug::printText("Sensors: Charge triggered");
+        PollData& data = Polling::getData(PollType::TIMER_ACTUAL);
+        if (!Timer::isTiming()) {
+          Timer::start(Timer::shortLength);
+          data.startMillis -= Timer::shortLength;
+        }
+        const float mult = 300000000.0f;
+        data.startMillis += floor(abs(chargeBandpass) * mult / data.lengthMillis);
+        if (Polling::checkPoll(PollType::TIMER_ACTUAL)) {
+          Polling::resetPoll(PollType::TIMER_ACTUAL);
+        }
       }
     }
-    if (Debug::printGraphs) {
-      Debug::printText("");
-    }
-  
+
+    Debug::printGraph("BonkHighpass", bonkHighpass * 10.0f);
+    //Debug::printGraph("ChargeLowpass", chargeLowpass);
+    //Debug::printGraph("ChargeHighpass", chargeHighpass);
+    Debug::printGraph("ChargeBandpass", chargeBandpass * 10.0f);
+    Debug::finishGraph();
+
     // Wait for the initial values to settle down
     if (ignoreLoops > 0) {
       --ignoreLoops;
-      return;
-    }
-  
-    // Handle tilting forward to activate the timer
-    if (lowpasses[zAccel] >= tiltEndThreshold && !Timer::isTiming()) {
-      Timer::start(Timer::defaultLength);
-    } else if (lowpasses[zAccel] >= tiltStartThreshold) {
-      Polling::resetPoll(PollType::BONK_DELAY); // Ensure we can't bonk when setting the lamp back down
-    }
-  
-    // Handle bonking
-    if (abs(highpasses[yAccel]) >= bonkThreshold) { // Moved enough to trigger a bonk
-      if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
-        Debug::printText("Sensors: Bonk triggered");
-        LED::toggle();
-      }
-      Polling::resetPoll(PollType::BONK_DELAY);
     }
   }
 }
 
 namespace Timer {
   void start(unsigned long millisToWait) {
-    LED::confirmationFlash(1);
     Polling::resetPoll(PollType::TIMER_ACTUAL);
     Polling::setPollLength(PollType::TIMER_ACTUAL, millisToWait);
     Debug::printText("Timer: Start");
@@ -295,7 +342,7 @@ namespace Timer {
   void update() {
     if (isTiming()) {
       unsigned long diffMillis = Polling::getPollElapsedMillis(PollType::TIMER_ACTUAL);
-      const unsigned long lengthMillis = Polling::getPollLengthMillis(PollType::TIMER_ACTUAL);
+      const unsigned long lengthMillis = Polling::getData(PollType::TIMER_ACTUAL).lengthMillis;
       Debug::printText("Timer: " + String(diffMillis) + "/" + String(lengthMillis) + " ms");
       if (!Polling::checkPoll(PollType::TIMER_ACTUAL)) { // Still timing
         float frac = timerLightFunc(((float)lengthMillis - diffMillis) / lengthMillis);
@@ -372,7 +419,7 @@ namespace Bluetooth {
   // Bluetooth initialization
   void setup() {
     if (!BLE.begin()) {
-      Serial.println("Starting BLE failed!");
+      Debug::printText("Starting BLE failed!");
       LED::errorLoop();
     }
   
@@ -397,8 +444,8 @@ namespace Bluetooth {
   
     // Start advertising
     BLE.advertise();
-  
-    Serial.println("Bluetooth device active, waiting for connections...");
+
+    Debug::printText("Bluetooth device active, waiting for connections...");
   }
   
   void update() {
@@ -418,6 +465,7 @@ namespace Bluetooth {
   
     if (timerCharacteristic.written()) {
       unsigned long millisToWait = (long)timerCharacteristic.value() * 60 * 1000;
+      LED::confirmationFlash(1);
       Timer::start(millisToWait);
     }
   
@@ -472,7 +520,7 @@ namespace Game {
       Bluetooth::gameCharacteristic.writeValue(points);
       reactionTime = startReactionTime - reactionTimeChange * points;
       Debug::printText("Game: " + String(points) + " points");
-      Debug::printText("Game: " + String(Polling::getPollLengthMillis(PollType::GAME)) + " ms reaction time ");
+      Debug::printText("Game: " + String(Polling::getData(PollType::GAME).lengthMillis) + " ms reaction time ");
     } else {
       LED::toggle();
     }
@@ -484,55 +532,45 @@ namespace Game {
       Polling::setPollLength(PollType::GAME, random(minDelay, maxDelay));
     }
   
-    Debug::printText("Game: Wait for " + String(Polling::getPollLengthMillis(PollType::GAME)) + " ms");
+    Debug::printText("Game: Wait for " + String(Polling::getData(PollType::GAME).lengthMillis) + " ms");
   }
 }
 
 namespace Polling {
-  unsigned long curMillis;
-
-  struct Data {
-    Data() : lastTimeMillis(0), lengthMillis(0), update(NULL) {}
-    Data(unsigned long ltm, unsigned long lm, void (*u)()) : lastTimeMillis(ltm), lengthMillis(lm), update(u) {}
-    
-    unsigned long lastTimeMillis; // Offset some of these by a small amount so they don't all run on the same cycle
-    unsigned long lengthMillis;
-    void (*update)();
-  };
-
-  std::unordered_map<PollType, Data> map = {
-  //  Key                           Last time/start time
-  //  |                             |   Update frequency
-  //  |                             |   |     Function
-    { PollType::SENSORS,      Data( 0,  16,   Sensors::update   ) },
-    { PollType::BUTTON,       Data( 5,  33,   Button::update    ) },
-    { PollType::TIMER,        Data( 10, 33,   Timer::update     ) },
-    { PollType::BLUETOOTH,    Data( 15, 200,  Bluetooth::update ) },
-    { PollType::GAME,         Data( 0,  0,    Game::update      ) },
-    { PollType::BONK_DELAY,   Data( 0,  200,  NULL )              },
-    { PollType::BUTTON_HOLD,  Data( 0,  1000, NULL )              },
-    { PollType::TIMER_ACTUAL, Data( 0,  0,    NULL )              } 
+  std::unordered_map<PollType, PollData> map = {
+  //  Key                               Last time/start time
+  //  |                                 |   Update frequency
+  //  |                                 |   |     Function
+    { PollType::SENSORS,      PollData( 0,  16,   Sensors::update   ) },
+    { PollType::BUTTON,       PollData( 5,  33,   Button::update    ) },
+    { PollType::TIMER,        PollData( 10, 33,   Timer::update     ) },
+    { PollType::BLUETOOTH,    PollData( 15, 200,  Bluetooth::update ) },
+    { PollType::GAME,         PollData( 0,  0,    Game::update      ) },
+    { PollType::BONK_DELAY,   PollData( 0,  200,  NULL )              },
+    { PollType::BONK_CHARGE,  PollData( 0,  1000, NULL )              },
+    { PollType::BUTTON_HOLD,  PollData( 0,  1000, NULL )              },
+    { PollType::TIMER_ACTUAL, PollData( 0,  0,    NULL )              } 
   };
 
   unsigned long getPollElapsedMillis(PollType type) {
-    return curMillis - map[type].lastTimeMillis;
+    return curMillis - map[type].startMillis;
   }
 
   unsigned long getPollRemainingMillis(PollType type) {
     return map[type].lengthMillis - getPollElapsedMillis(type);
   }
 
-  unsigned long getPollLengthMillis(PollType type) {
-    return map[type].lengthMillis;
+  PollData& getData(PollType type) {
+    return map[type];
   }
   
   bool checkPoll(PollType type) {
-    return map[type].lengthMillis > 0 && curMillis - map[type].lastTimeMillis >= map[type].lengthMillis || 
+    return map[type].lengthMillis > 0 && curMillis - map[type].startMillis >= map[type].lengthMillis || 
            map[type].lengthMillis == 1; // Run every frame
   }
   
   void resetPoll(PollType type) {
-    map[type].lastTimeMillis = curMillis;
+    map[type].startMillis = curMillis;
   }
 
   bool isActive(PollType type) {
