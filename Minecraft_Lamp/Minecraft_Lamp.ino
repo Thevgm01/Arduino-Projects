@@ -7,7 +7,7 @@
 //////////////////////////
 namespace Debug {
   const bool printMessages = false;
-  const bool printGraphs = true;
+  const bool printGraphs = false;
   
   void printText(String message);
   void printGraph(float number);
@@ -38,12 +38,15 @@ namespace Button {
 }
 
 namespace Sensors {
-  const float bonkThreshold = 0.003f;
   const float chargeThreshold = 0.03f;
-  float bonkLowpassEma = 0.99f;
-  float chargeLowpassEma = 0.95f;
+  float chargeLowpassEma = 0.8f;
   float chargeBandpassEma = 0.2f;
   
+  void setup();
+  void update();
+}
+
+namespace Sound {
   void setup();
   void update();
 }
@@ -75,7 +78,7 @@ namespace Game {
   void update();
 }
 
-enum class PollType { SENSORS, BUTTON, TIMER, BLUETOOTH, GAME, BONK_DELAY, BONK_CHARGE, BUTTON_HOLD, TIMER_ACTUAL };
+enum class PollType { SENSORS, SOUND, BUTTON, TIMER, BLUETOOTH, GAME, BONK_DELAY, BONK_CHARGE, BUTTON_HOLD, TIMER_ACTUAL };
 
 struct PollData {
   PollData() : startMillis(0), lengthMillis(0), update(NULL) {}
@@ -228,6 +231,8 @@ namespace Button {
 }
 
 namespace Sensors {
+  const int SOUND_PIN = A0;
+  
   unsigned int ignoreLoops = 50;
   
   enum { xAccel, yAccel, zAccel,
@@ -258,20 +263,6 @@ namespace Sensors {
     IMU.readAcceleration(readings[0], readings[1], readings[2]);
     IMU.readGyroscope(readings[3], readings[4], readings[5]);
 
-    // Handle bonking
-    bonkLowpass = bonkLowpassEma * abs(readings[yAccel]) + (1 - bonkLowpassEma) * bonkLowpass;
-    bonkHighpass = abs(abs(readings[yAccel]) - bonkLowpass);
-  
-    if (ignoreLoops == 0 && 
-        abs(bonkHighpass) >= bonkThreshold && // Moved enough to trigger a bonk, 
-        abs(chargeBandpass) < chargeThreshold) { // Not charging
-      if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
-        Debug::printText("Sensors: Bonk triggered");
-        LED::smartToggle();
-      }
-      Polling::resetPoll(PollType::BONK_DELAY);
-    }
-
     // Handle charging
     if (Polling::checkPoll(PollType::BONK_DELAY)) {
       float chargeSum = abs(readings[xAccel]) + abs(readings[yAccel]) + abs(readings[zAccel]);
@@ -287,7 +278,7 @@ namespace Sensors {
           Timer::start(Timer::shortLength);
           data.startMillis -= Timer::shortLength;
         }
-        const float mult = 300000000.0f;
+        const float mult = 3000.0f;
         data.startMillis += floor(abs(chargeBandpass) * mult / data.lengthMillis);
         if (Polling::checkPoll(PollType::TIMER_ACTUAL)) {
           Polling::resetPoll(PollType::TIMER_ACTUAL);
@@ -295,15 +286,37 @@ namespace Sensors {
       }
     }
 
-    Debug::printGraph("BonkHighpass", bonkHighpass * 10.0f);
-    //Debug::printGraph("ChargeLowpass", chargeLowpass);
-    //Debug::printGraph("ChargeHighpass", chargeHighpass);
+    Debug::printGraph("ChargeLowpass", chargeLowpass);
+    Debug::printGraph("ChargeHighpass", chargeHighpass);
     Debug::printGraph("ChargeBandpass", chargeBandpass * 10.0f);
-    Debug::finishGraph();
 
     // Wait for the initial values to settle down
     if (ignoreLoops > 0) {
       --ignoreLoops;
+    }
+  }
+}
+
+namespace Sound {
+  const int ANALOG_PIN = A0;
+  const int DIGITAL_PIN = 2;
+
+  void setup() {
+    pinMode(DIGITAL_PIN, INPUT);
+  }
+  
+  void update() {
+    int analog = analogRead(ANALOG_PIN);
+
+    bool digital = digitalRead(DIGITAL_PIN);
+
+    //Debug::printGraph("Sound", analog);
+    //Debug::printGraph("Sound", digital);
+
+    if (digital && Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
+      Debug::printText("Sound: Bonk triggered");
+      LED::smartToggle();
+      Polling::resetPoll(PollType::BONK_DELAY);
     }
   }
 }
@@ -542,11 +555,12 @@ namespace Polling {
   //  |                                 |   Update frequency
   //  |                                 |   |     Function
     { PollType::SENSORS,      PollData( 0,  16,   Sensors::update   ) },
+    { PollType::SOUND,        PollData( 0,  1,    Sound::update     ) },
     { PollType::BUTTON,       PollData( 5,  33,   Button::update    ) },
     { PollType::TIMER,        PollData( 10, 33,   Timer::update     ) },
     { PollType::BLUETOOTH,    PollData( 15, 200,  Bluetooth::update ) },
     { PollType::GAME,         PollData( 0,  0,    Game::update      ) },
-    { PollType::BONK_DELAY,   PollData( 0,  200,  NULL )              },
+    { PollType::BONK_DELAY,   PollData( 0,  70,   NULL )              },
     { PollType::BONK_CHARGE,  PollData( 0,  1000, NULL )              },
     { PollType::BUTTON_HOLD,  PollData( 0,  1000, NULL )              },
     { PollType::TIMER_ACTUAL, PollData( 0,  0,    NULL )              } 
@@ -597,6 +611,7 @@ void setup() {
   LED::setup();
   Button::setup();
   Sensors::setup();
+  Sound::setup();
   Bluetooth::setup();
 }
 
@@ -605,9 +620,11 @@ void loop() {
   Polling::awaitFunctionPoll(PollType::BUTTON);
   if (!Button::lastButtonState) { // Don't check anything else if the button is held
     Polling::awaitFunctionPoll(PollType::SENSORS);
+    Polling::awaitFunctionPoll(PollType::SOUND);
     Polling::awaitFunctionPoll(PollType::TIMER);
     Polling::awaitFunctionPoll(PollType::BLUETOOTH);
     Polling::awaitFunctionPoll(PollType::GAME);
   }
-  delay(10);
+  Debug::finishGraph();
+  delay(1);
 }
