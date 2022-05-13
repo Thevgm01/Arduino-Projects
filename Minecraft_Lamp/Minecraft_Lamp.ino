@@ -38,10 +38,7 @@ namespace Button {
 }
 
 namespace Sensors {
-  const float chargeThreshold = 0.03f;
-  float chargeLowpassEma = 0.8f;
-  float chargeBandpassEma = 0.2f;
-  
+  unsigned int ignoreLoops = 50;
   void setup();
   void update();
 }
@@ -141,7 +138,7 @@ namespace LED {
   
   const int confirmationDelayMillis = 100;
   const int errorDelayMillis = 500;
-  const float smartToggleThreshold = 0.6f;
+  const float smartToggleThreshold = 0.0f;
 
   void setBrightnessInt(int val) {
     curBrightness = val;
@@ -232,20 +229,19 @@ namespace Button {
 
 namespace Sensors {
   const int SOUND_PIN = A0;
-  
-  unsigned int ignoreLoops = 50;
-  
+    
   enum { xAccel, yAccel, zAccel,
          xGyro, yGyro, zGyro };
 
-  // Bonking
-  float bonkLowpass;
-  float bonkHighpass;
+  const float chargeThreshold = 2.0f;
+  float chargeLowpassEma = 0.4f;
+  float chargeHighpassSmoothedEma = 0.4f;
 
   // Charging
   float chargeLowpass;
+  float lastChargeLowpass = 0.0f;
   float chargeHighpass;
-  float chargeBandpass;
+  float chargeHighpassSmoothed;
 
   void setup() {
     if (!IMU.begin()) {
@@ -264,31 +260,34 @@ namespace Sensors {
     IMU.readGyroscope(readings[3], readings[4], readings[5]);
 
     // Handle charging
-    if (Polling::checkPoll(PollType::BONK_DELAY)) {
-      float chargeSum = abs(readings[xAccel]) + abs(readings[yAccel]) + abs(readings[zAccel]);
-      chargeLowpass = chargeLowpassEma * chargeSum + (1 - chargeLowpassEma) * chargeLowpass;
-      chargeHighpass = abs(chargeSum - chargeLowpass);
-      chargeBandpass = chargeBandpassEma * chargeHighpass + (1 - chargeBandpassEma) * chargeBandpass;
-  
-      if (ignoreLoops == 0 &&
-          abs(chargeBandpass) >= chargeThreshold) { // Charging
+    //float chargeSum = abs(readings[xAccel]) + abs(readings[yAccel]) + abs(readings[zAccel]);
+    float chargeSum = abs(readings[xGyro]) + abs(readings[yGyro]) + abs(readings[zGyro]);
+    
+    chargeLowpass = chargeLowpassEma * chargeSum + (1 - chargeLowpassEma) * chargeLowpass;
+    chargeHighpass = abs(chargeSum - chargeLowpass);
+    chargeHighpassSmoothed = chargeHighpassSmoothedEma * chargeHighpass + (1 - chargeHighpassSmoothedEma) * chargeHighpassSmoothed;
+
+    if (abs(chargeHighpassSmoothed) >= chargeThreshold) { // Charging
+      if (ignoreLoops == 0) {
         Debug::printText("Sensors: Charge triggered");
         PollData& data = Polling::getData(PollType::TIMER_ACTUAL);
         if (!Timer::isTiming()) {
+          Debug::printText("Sensors: Timer inactive");
           Timer::start(Timer::shortLength);
-          data.startMillis -= Timer::shortLength;
+          data.startMillis -= Timer::shortLength - 1;
         }
-        const float mult = 3000.0f;
-        data.startMillis += floor(abs(chargeBandpass) * mult / data.lengthMillis);
+        data.startMillis += data.lengthMillis * Polling::getData(PollType::SENSORS).lengthMillis / 5000;
         if (Polling::checkPoll(PollType::TIMER_ACTUAL)) {
-          Polling::resetPoll(PollType::TIMER_ACTUAL);
+          Debug::printText("Sensors: Timer rollover");
+          Timer::start(data.lengthMillis);
         }
       }
+      Polling::resetPoll(PollType::BONK_DELAY);
     }
 
-    Debug::printGraph("ChargeLowpass", chargeLowpass);
-    Debug::printGraph("ChargeHighpass", chargeHighpass);
-    Debug::printGraph("ChargeBandpass", chargeBandpass * 10.0f);
+    Debug::printGraph("chargeLowpass", chargeLowpass);
+    Debug::printGraph("sumDiff", chargeHighpass);
+    Debug::printGraph("chargeHighpassSmoothed", chargeHighpassSmoothed);
 
     // Wait for the initial values to settle down
     if (ignoreLoops > 0) {
@@ -302,6 +301,7 @@ namespace Sound {
   const int DIGITAL_PIN = 2;
 
   void setup() {
+    analogReadResolution(12);
     pinMode(DIGITAL_PIN, INPUT);
   }
   
@@ -313,9 +313,12 @@ namespace Sound {
     //Debug::printGraph("Sound", analog);
     //Debug::printGraph("Sound", digital);
 
-    if (digital && Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
-      Debug::printText("Sound: Bonk triggered");
-      LED::smartToggle();
+    if (digital) {
+      if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
+        Debug::printText("Sound: Bonk triggered");
+        LED::smartToggle();
+        Sensors::ignoreLoops = 50;
+      }
       Polling::resetPoll(PollType::BONK_DELAY);
     }
   }
@@ -339,10 +342,10 @@ namespace Timer {
    // All these values are hard-coded to feel good, check links for details
   // Make sure 'x' is between 0 and 1
   
-  // https://www.desmos.com/calculator/in73bophjw
+  // https://www.desmos.com/calculator/u9wygbychn
   // Spend more time dim to counteract the logarithmic nature of light while tilting
   float tanLightFunc(float x) {
-    const float a = 0.5f, b = 0.45f, c = 0.025f;
+    const float a = 0.49758f, b = 0.45f, c = 0.0f;
     return a * tan(b * PI * x) / PI - c;
   }
   
@@ -362,10 +365,10 @@ namespace Timer {
         LED::setBrightnessFloat(frac);
       } else {
         Polling::setPollLength(PollType::TIMER_ACTUAL, 0);
+        LED::setBrightnessInt(0);
       }
     }
   }
-  
 }
 
 namespace Morse {
