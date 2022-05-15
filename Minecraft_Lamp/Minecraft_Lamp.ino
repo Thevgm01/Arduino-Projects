@@ -233,11 +233,12 @@ namespace Sensors {
   enum { xAccel, yAccel, zAccel,
          xGyro, yGyro, zGyro };
 
-  const float chargeThreshold = 2.0f;
+  const float chargeThreshold = 10.0f;
   float chargeLowpassEma = 0.4f;
   float chargeHighpassSmoothedEma = 0.4f;
 
   // Charging
+  float lastChargeSum = 0.0f;
   float chargeLowpass;
   float lastChargeLowpass = 0.0f;
   float chargeHighpass;
@@ -260,9 +261,12 @@ namespace Sensors {
     IMU.readGyroscope(readings[3], readings[4], readings[5]);
 
     // Handle charging
-    //float chargeSum = abs(readings[xAccel]) + abs(readings[yAccel]) + abs(readings[zAccel]);
-    float chargeSum = abs(readings[xGyro]) + abs(readings[yGyro]) + abs(readings[zGyro]);
-    
+    // Filter out any spikes by taking the min between two polls
+    float newChargeSum = abs(readings[xGyro]) + abs(readings[yGyro]) + abs(readings[zGyro]);
+    float chargeSum = min(newChargeSum, lastChargeSum);
+    lastChargeSum = newChargeSum;
+
+    // Run the EMA
     chargeLowpass = chargeLowpassEma * chargeSum + (1 - chargeLowpassEma) * chargeLowpass;
     chargeHighpass = abs(chargeSum - chargeLowpass);
     chargeHighpassSmoothed = chargeHighpassSmoothedEma * chargeHighpass + (1 - chargeHighpassSmoothedEma) * chargeHighpassSmoothed;
