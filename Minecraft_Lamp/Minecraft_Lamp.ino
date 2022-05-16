@@ -567,7 +567,7 @@ namespace Polling {
     { PollType::TIMER,        PollData( 10, 33,   Timer::update     ) },
     { PollType::BLUETOOTH,    PollData( 15, 200,  Bluetooth::update ) },
     { PollType::GAME,         PollData( 0,  0,    Game::update      ) },
-    { PollType::BONK_DELAY,   PollData( 0,  70,   NULL )              },
+    { PollType::BONK_DELAY,   PollData( 0,  50,   NULL )              },
     { PollType::BONK_CHARGE,  PollData( 0,  1000, NULL )              },
     { PollType::BUTTON_HOLD,  PollData( 0,  1000, NULL )              },
     { PollType::TIMER_ACTUAL, PollData( 0,  0,    NULL )              } 
@@ -626,8 +626,8 @@ void loop() {
   Polling::curMillis = millis();
   Polling::awaitFunctionPoll(PollType::BUTTON);
   if (!Button::lastButtonState) { // Don't check anything else if the button is held
-    Polling::awaitFunctionPoll(PollType::SENSORS);
     Polling::awaitFunctionPoll(PollType::SOUND);
+    Polling::awaitFunctionPoll(PollType::SENSORS);
     Polling::awaitFunctionPoll(PollType::TIMER);
     Polling::awaitFunctionPoll(PollType::BLUETOOTH);
     Polling::awaitFunctionPoll(PollType::GAME);
