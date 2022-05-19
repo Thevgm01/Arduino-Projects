@@ -7,7 +7,7 @@
 //////////////////////////
 namespace Debug {
   const bool printMessages = false;
-  const bool printGraphs = false;
+  const bool printGraphs = true;
   
   void printText(String message);
   void printGraph(float number);
@@ -233,16 +233,16 @@ namespace Sensors {
   enum { xAccel, yAccel, zAccel,
          xGyro, yGyro, zGyro };
 
-  const float chargeThreshold = 10.0f;
-  float chargeLowpassEma = 0.4f;
-  float chargeHighpassSmoothedEma = 0.4f;
+  const float shakeThreshold = 10.0f;
+  float shakeLowpassEma = 0.4f;
+  float shakeBandpassEma = 0.4f;
 
   // Charging
-  float lastChargeSum = 0.0f;
-  float chargeLowpass;
-  float lastChargeLowpass = 0.0f;
-  float chargeHighpass;
-  float chargeHighpassSmoothed;
+  float lastShakeSum = 0.0f;
+  float shakeLowpass;
+  float lastShakeLowpass = 0.0f;
+  float shakeHighpass;
+  float shakeBandpass;
 
   void setup() {
     if (!IMU.begin()) {
@@ -262,18 +262,18 @@ namespace Sensors {
 
     // Handle charging
     // Filter out any spikes by taking the min between two polls
-    float newChargeSum = abs(readings[xGyro]) + abs(readings[yGyro]) + abs(readings[zGyro]);
-    float chargeSum = min(newChargeSum, lastChargeSum);
-    lastChargeSum = newChargeSum;
+    float newShakeSum = abs(readings[xGyro]) + abs(readings[yGyro]) + abs(readings[zGyro]);
+    float shakeSum = min(newShakeSum, lastShakeSum);
+    lastShakeSum = newShakeSum;
 
     // Run the EMA
-    chargeLowpass = chargeLowpassEma * chargeSum + (1 - chargeLowpassEma) * chargeLowpass;
-    chargeHighpass = abs(chargeSum - chargeLowpass);
-    chargeHighpassSmoothed = chargeHighpassSmoothedEma * chargeHighpass + (1 - chargeHighpassSmoothedEma) * chargeHighpassSmoothed;
+    shakeLowpass = shakeLowpassEma * shakeSum + (1 - shakeLowpassEma) * shakeLowpass;
+    shakeHighpass = abs(shakeSum - shakeLowpass);
+    shakeBandpass = shakeBandpassEma * shakeHighpass + (1 - shakeBandpassEma) * shakeBandpass;
 
-    if (abs(chargeHighpassSmoothed) >= chargeThreshold) { // Charging
+    if (abs(shakeBandpass) >= shakeThreshold) { // Charging
       if (ignoreLoops == 0) {
-        Debug::printText("Sensors: Charge triggered");
+        Debug::printText("Sensors: Shake triggered");
         PollData& data = Polling::getData(PollType::TIMER_ACTUAL);
         if (!Timer::isTiming()) {
           Debug::printText("Sensors: Timer inactive");
@@ -289,9 +289,10 @@ namespace Sensors {
       Polling::resetPoll(PollType::BONK_DELAY);
     }
 
-    Debug::printGraph("chargeLowpass", chargeLowpass);
-    Debug::printGraph("sumDiff", chargeHighpass);
-    Debug::printGraph("chargeHighpassSmoothed", chargeHighpassSmoothed);
+    //Debug::printGraph("shakeLowpass", shakeLowpass);
+    //Debug::printGraph("sumDiff", shakeHighpass);
+    Debug::printGraph("shakeHighpass", shakeHighpass);
+    //Debug::printGraph("shakeBandpass", shakeBandpass);
 
     // Wait for the initial values to settle down
     if (ignoreLoops > 0) {
@@ -315,7 +316,7 @@ namespace Sound {
     bool digital = digitalRead(DIGITAL_PIN);
 
     //Debug::printGraph("Sound", analog);
-    //Debug::printGraph("Sound", digital);
+    Debug::printGraph("Sound", digital);
 
     if (digital) {
       if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
