@@ -7,7 +7,7 @@
 //////////////////////////
 namespace Debug {
   const bool printMessages = false;
-  const bool printGraphs = true;
+  const bool printGraphs = false;
   
   void printText(String message);
   void printGraph(float number);
@@ -291,8 +291,8 @@ namespace Sensors {
 
     //Debug::printGraph("shakeLowpass", shakeLowpass);
     //Debug::printGraph("sumDiff", shakeHighpass);
-    Debug::printGraph("shakeHighpass", shakeHighpass);
-    //Debug::printGraph("shakeBandpass", shakeBandpass);
+    //Debug::printGraph("shakeHighpass", shakeHighpass);
+    Debug::printGraph("shakeBandpass", shakeBandpass);
 
     // Wait for the initial values to settle down
     if (ignoreLoops > 0) {
@@ -305,6 +305,12 @@ namespace Sound {
   const int ANALOG_PIN = A0;
   const int DIGITAL_PIN = 2;
 
+  float soundEma = 0.99f;
+  float soundLowpass;
+  float soundHighpass;
+
+  float bonkThreshold = 12.0f;
+  
   void setup() {
     analogReadResolution(12);
     pinMode(DIGITAL_PIN, INPUT);
@@ -313,12 +319,17 @@ namespace Sound {
   void update() {
     int analog = analogRead(ANALOG_PIN);
 
+    soundLowpass = soundEma * analog + (1 - soundEma) * soundLowpass;
+    soundHighpass = abs(analog - soundLowpass);
+
     bool digital = digitalRead(DIGITAL_PIN);
 
-    //Debug::printGraph("Sound", analog);
-    Debug::printGraph("Sound", digital);
+    //Debug::printGraph("soundLowpass", soundLowpass);
+    Debug::printGraph("soundHighpass", soundHighpass);
+    //Debug::printGraph("Sound", digital);
 
-    if (digital) {
+    //if (digital) {
+    if (soundHighpass >= bonkThreshold) {
       if (Polling::checkPoll(PollType::BONK_DELAY)) { // Enough time has passed since the last bonk
         Debug::printText("Sound: Bonk triggered");
         LED::smartToggle();
