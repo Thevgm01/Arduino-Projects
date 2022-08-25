@@ -1,2 +1,3 @@
-
-libraries/
+libraries/ArduinoBLE
+libraries/Arduino_LSM9DS1
+libraries/readme.txt
