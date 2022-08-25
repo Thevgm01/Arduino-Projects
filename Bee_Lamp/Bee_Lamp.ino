@@ -1,5 +1,6 @@
 #include <Arduino_LSM9DS1.h>
 #include <ArduinoBLE.h>
+#include <PollFunctions.h>
 #include <string>
 
 // Inner cable hole
@@ -42,10 +43,6 @@ const float LED_COORDS[4][2] = {
 
 const int AUDIO_PIN = A6;
 
-float xAccelLowpass = 0.0f;
-float yAccelLowpass = 0.0f;
-float accelLowpassEma = 0.8f;
-
 void logarithmicWrite(int pin, float brightness) {
   analogWrite(pin, pow(brightness, 3)*MAX_BRIGHTNESS);
 }
@@ -61,42 +58,63 @@ void writeToAllPins(int brightness) {
   writeToAllPins(brightness, brightness, brightness, brightness);
 }
 
+class Sensors : public Polls {
+  public:
+    Sensors(unsigned long updateDelay) : Polls(updateDelay) {
+      if (!IMU.begin()) {
+        Serial.println("Failed to initialize IMU!");
+      }
+    }
+  
+    bool update() override {
+      if (!Polls::update()) return false;
+      
+      if (!IMU.accelerationAvailable() || !IMU.gyroscopeAvailable()) return false;
+  
+      enum { xAccel, yAccel, zAccel,
+             xGyro, yGyro, zGyro };
+      float readings[6];
+      IMU.readAcceleration(readings[xAccel], readings[yAccel], readings[zAccel]);
+      IMU.readGyroscope(readings[xGyro], readings[yGyro], readings[zGyro]);
+  
+      //Serial.println("X:" + String(readings[xAccel]) + ",Y:" + String(readings[yAccel]) + ",Z:" + String(readings[zAccel]));
+  
+      xAccelLowpass = xAccelLowpass * accelLowpassEma + readings[xAccel] * (1 - accelLowpassEma);
+      yAccelLowpass = yAccelLowpass * accelLowpassEma + readings[yAccel] * (1 - accelLowpassEma);
+  
+      float len = sqrt(xAccelLowpass * xAccelLowpass + yAccelLowpass * yAccelLowpass);
+      float normalized[] = { -yAccelLowpass / len, -xAccelLowpass / len };
+  
+      for (int i = 0; i < 4; ++i) {
+        float dot = LED_COORDS[i][0] * normalized[0] + LED_COORDS[i][1] * normalized[1];
+        logarithmicWrite(LED_PINS[i], dot * len);
+      }
+    }
+  
+  private:
+    float xAccelLowpass = 0.0f;
+    float yAccelLowpass = 0.0f;
+    float accelLowpassEma = 0.8f;
+};
+
+Sensors* sensors;
+
 void setup() {
   analogWriteResolution(12);
   analogReadResolution(12);
   digitalWrite(LED_BUILTIN, LOW);
   digitalWrite(LED_PWR, LOW);
 
-  if (!IMU.begin()) {
-    Serial.println("Failed to initialize IMU!");
-  }
+  randomSeed(analogRead(A5));
 
+  sensors = new Sensors(16);
 }
 
-enum { xAccel, yAccel, zAccel,
-       xGyro, yGyro, zGyro };
-
 void loop() {
-    if (IMU.accelerationAvailable() && IMU.gyroscopeAvailable()) {
-      float readings[6];
-      IMU.readAcceleration(readings[xAccel], readings[yAccel], readings[zAccel]);
-      IMU.readGyroscope(readings[xGyro], readings[yGyro], readings[zGyro]);
+    Polls::setMillis(millis());
 
-      //Serial.println("X:" + String(readings[xAccel]) + ",Y:" + String(readings[yAccel]) + ",Z:" + String(readings[zAccel]));
-
-      xAccelLowpass = xAccelLowpass * accelLowpassEma + readings[xAccel] * (1 - accelLowpassEma);
-      yAccelLowpass = yAccelLowpass * accelLowpassEma + readings[yAccel] * (1 - accelLowpassEma);
-
-      float len = sqrt(xAccelLowpass * xAccelLowpass + yAccelLowpass * yAccelLowpass);
-      float normalized[] = { -yAccelLowpass / len, -xAccelLowpass / len };
-
-      for (int i = 0; i < 4; ++i) {
-        float dot = LED_COORDS[i][0] * normalized[0] + LED_COORDS[i][1] * normalized[1];
-        logarithmicWrite(LED_PINS[i], dot * len);
-      }
-    }
-    
+    sensors->update();
     Serial.println("Volume:" + String(analogRead(AUDIO_PIN)));
 
-    delay(10);
+    delay(1);
 }
