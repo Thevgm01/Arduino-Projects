@@ -30,8 +30,9 @@ unsigned long Polls::getPollRemainingMillis() {
 }
 
 bool Polls::checkPoll() {
-    return lengthMillis > 0 && curMillis - startMillis >= lengthMillis || 
-           lengthMillis == 1; // Run every frame
+    return lengthMillis > 0 && curMillis - startMillis >= lengthMillis
+    //     || lengthMillis == 1 // Run every frame
+           ;
 }
 
 void Polls::resetPoll() {
