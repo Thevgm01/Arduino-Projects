@@ -2,7 +2,6 @@
 #include <ArduinoBLE.h>
 #include <PollFunctions.h>
 #include <string>
-#include <unordered_map>
 
 // Inner cable hole
 // Radius = 10.4 mm
@@ -18,15 +17,16 @@
 template<typename T>
 int sign(T val) { return (T(0) < val) - (val < T(0)); }
 
-const float NORMALIZED_WIDTH = 1.0f/sqrt(2);//2.0f/sqrt(13);
-const float NORMALIZED_LENGTH = 1.0f/sqrt(2);//3.0f/sqrt(13);
+static constexpr float NORMALIZED_WIDTH = 1.0f/sqrt(2);//2.0f/sqrt(13);
+static constexpr float NORMALIZED_LENGTH = 1.0f/sqrt(2);//3.0f/sqrt(13);
 
-const int ANALOG_RESOLUTION = 12;
-const int ANALOG_MAX = (1 << ANALOG_RESOLUTION) - 1;
+static constexpr int ANALOG_RESOLUTION = 12;
+static constexpr int ANALOG_MAX = (1 << ANALOG_RESOLUTION) - 1;
 
-const float DEBUG_ACCEL_SCALE = 25.0f,
-            DEBUG_GYRO_SCALE  = 1.5f,
-            DEBUG_SOUND_SCALE = 10.0f;
+static constexpr float
+  DEBUG_ACCEL_SCALE = 25.0f,
+  DEBUG_GYRO_SCALE  = 1.5f,
+  DEBUG_SOUND_SCALE = 10.0f;
             
 enum { 
   BACK_RIGHT  = 0, 
@@ -35,21 +35,21 @@ enum {
   BACK_LEFT   = 3 
 };
 
-const int LED_PINS[] = { 
+static constexpr byte LED_PINS[] = { 
   D2, 
   D3, 
   D4, 
   D5 
 };
 
-const float LED_COORDS[4][2] = { 
+static constexpr byte AUDIO_PIN = A6;
+
+static constexpr float LED_COORDS[4][2] = { 
   {  NORMALIZED_WIDTH, -NORMALIZED_LENGTH }, // BACK_RIGHT
   {  NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_RIGHT
   { -NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_LEFT
   { -NORMALIZED_WIDTH, -NORMALIZED_LENGTH }  // BACK_LEFT
 };
-
-const int AUDIO_PIN = A6;
 
 void logarithmicWrite(int pin, float brightness) {
   analogWrite(pin, pow(brightness, 3) * ANALOG_MAX);
@@ -71,7 +71,7 @@ class Sensors : public Polls {
   // Then, wait until all three bandpasses have returned to under a different threshold for a period of time before allowing another bonk
   
   private:
-    const float 
+    static constexpr float 
       accelThresholdHigh = 1.5f / DEBUG_ACCEL_SCALE, accelThresholdLow = 0.5f / DEBUG_ACCEL_SCALE,
       gyroThresholdHigh  = 1.5f / DEBUG_GYRO_SCALE,  gyroThresholdLow  = 1.0f / DEBUG_GYRO_SCALE,
       soundThresholdHigh = 0.8f / DEBUG_SOUND_SCALE, soundThresholdLow = 0.2f / DEBUG_SOUND_SCALE;
@@ -81,20 +81,23 @@ class Sensors : public Polls {
     int gyroCounter = 0;
     int soundCounter = 0;
 
-    const float 
+    static constexpr float 
       bonkGracePeriod = 0.15f, // Seconds
       bonkSettlePeriod = 0.1f;
 
-    const int bonkGraceLoops, bonkSettleLoops;
+    const int
+      bonkGraceLoops,
+      bonkSettleLoops;
   
-    float accelLowpassEma  = 0.85f, accelBandpassEma = 0.85f,
-          gyroLowpassEma   = 0.85f, gyroBandpassEma  = 0.85f,
-          soundLowpassEma  = 0.85f, soundBandpassEma = 0.85f;
+    static constexpr float 
+      accelLowpassEma = 0.85f, accelBandpassEma = 0.85f,
+      gyroLowpassEma  = 0.85f, gyroBandpassEma  = 0.85f,
+      soundLowpassEma = 0.85f, soundBandpassEma = 0.85f;
 
     int readingCount = 0;
     int soundReadingCount = 0;
 
-    enum { 
+    static constexpr byte
       xAccel = 0, yAccel = 1, zAccel = 2, 
       xGyro = 3, yGyro = 4, zGyro = 5, 
       sound = 6,
@@ -102,12 +105,13 @@ class Sensors : public Polls {
       accelAbsSum = 7,
       gyroAbsSum = 8,
 
-      reading  = 0 << 6,
-      lowpass  = 1 << 6,
-      highpass = 2 << 6,
-      bandpass = 3 << 6 };
+      reading  = 0 << 4, // 00_0000
+      lowpass  = 1 << 4, // 01_0000
+      highpass = 2 << 4, // 10_0000
+      bandpass = 3 << 4; // 11_0000
 
-    std::unordered_map<int, float> map;
+    static constexpr byte largestNumber = gyroAbsSum|bandpass;
+    float data[largestNumber];
 
     void runLowpass(float &lowpass, const float reading, const float ema) { lowpass = lowpass * ema + reading * (1 - ema); }
     void runHighpass(float &highpass, const float lowpass, const float reading) { highpass = reading - lowpass; }
@@ -127,11 +131,11 @@ class Sensors : public Polls {
     }
 
     void runFullpass(const int type, const float lowpassEma, const float bandpassEma) {
-      runFullpass(map[type|reading], map[type|lowpass], map[type|highpass], map[type|bandpass], lowpassEma, bandpassEma);
+      runFullpass(data[type|reading], data[type|lowpass], data[type|highpass], data[type|bandpass], lowpassEma, bandpassEma);
     }
 
     void runFullpassAbs(const int type, const float lowpassEma, const float bandpassEma) {
-      runFullpassAbs(abs(map[type|reading]), map[type|lowpass], map[type|highpass], map[type|bandpass], lowpassEma, bandpassEma);
+      runFullpassAbs(abs(data[type|reading]), data[type|lowpass], data[type|highpass], data[type|bandpass], lowpassEma, bandpassEma);
     }
     
   public:
@@ -154,12 +158,12 @@ class Sensors : public Polls {
         IMU.readAcceleration(newReadings[xAccel], newReadings[yAccel], newReadings[zAccel]);
         IMU.readGyroscope(newReadings[xGyro], newReadings[yGyro], newReadings[zGyro]);
         for (int i = xAccel; i <= zGyro; ++i) {
-          map[i|reading] += newReadings[i];
+          data[i|reading] += newReadings[i];
         }
         ++readingCount;
       }
       
-      map[sound|reading] += (float)analogRead(AUDIO_PIN) / ANALOG_MAX;
+      data[sound|reading] += (float)analogRead(AUDIO_PIN) / ANALOG_MAX;
       ++soundReadingCount;
     }
 
@@ -169,9 +173,9 @@ class Sensors : public Polls {
       if (readingCount == 0 || soundReadingCount == 0) return false;
 
       for (int i = xAccel; i <= zGyro; ++i) {
-        map[i|reading] /= readingCount;
+        data[i|reading] /= readingCount;
       }
-      map[sound|reading] /= soundReadingCount;
+      data[sound|reading] /= soundReadingCount;
 
       //Serial.println("X:" + String(readings[xAccel]) + ",Y:" + String(readings[yAccel]) + ",Z:" + String(readings[zAccel]));
 
@@ -179,30 +183,30 @@ class Sensors : public Polls {
       runFullpass(yAccel, accelLowpassEma, accelBandpassEma);
       runFullpass(zAccel, accelLowpassEma, accelBandpassEma);
       
-      map[accelAbsSum|lowpass]  = abs(map[xAccel|lowpass])  + abs(map[yAccel|lowpass])  + abs(map[zAccel|lowpass]);
-      map[accelAbsSum|highpass] = abs(map[xAccel|highpass]) + abs(map[yAccel|highpass]) + abs(map[zAccel|highpass]);
-      map[accelAbsSum|bandpass] = abs(map[xAccel|bandpass]) + abs(map[yAccel|bandpass]) + abs(map[zAccel|bandpass]);
+      data[accelAbsSum|lowpass]  = abs(data[xAccel|lowpass])  + abs(data[yAccel|lowpass])  + abs(data[zAccel|lowpass]);
+      data[accelAbsSum|highpass] = abs(data[xAccel|highpass]) + abs(data[yAccel|highpass]) + abs(data[zAccel|highpass]);
+      data[accelAbsSum|bandpass] = abs(data[xAccel|bandpass]) + abs(data[yAccel|bandpass]) + abs(data[zAccel|bandpass]);
 
       runFullpass(xGyro, gyroLowpassEma, gyroBandpassEma);
       runFullpass(yGyro, gyroLowpassEma, gyroBandpassEma);
       runFullpass(zGyro, gyroLowpassEma, gyroBandpassEma);
 
-      map[gyroAbsSum|lowpass]  = abs(map[xGyro|lowpass])  + abs(map[yGyro|lowpass])  + abs(map[zGyro|lowpass]);
-      map[gyroAbsSum|highpass] = abs(map[xGyro|highpass]) + abs(map[yGyro|highpass]) + abs(map[zGyro|highpass]);
-      map[gyroAbsSum|bandpass] = abs(map[xGyro|bandpass]) + abs(map[yGyro|bandpass]) + abs(map[zGyro|bandpass]);
+      data[gyroAbsSum|lowpass]  = abs(data[xGyro|lowpass])  + abs(data[yGyro|lowpass])  + abs(data[zGyro|lowpass]);
+      data[gyroAbsSum|highpass] = abs(data[xGyro|highpass]) + abs(data[yGyro|highpass]) + abs(data[zGyro|highpass]);
+      data[gyroAbsSum|bandpass] = abs(data[xGyro|bandpass]) + abs(data[yGyro|bandpass]) + abs(data[zGyro|bandpass]);
 
       runFullpassAbs(sound, soundLowpassEma, soundBandpassEma);
 
       if (false) {
-        Serial.print("accelerometer:" + String(DEBUG_ACCEL_SCALE*map[accelAbsSum|highpass]));
-        Serial.print(",gyroscope:" + String(DEBUG_GYRO_SCALE*map[gyroAbsSum|highpass]));
-        Serial.println(",sound:" + String(DEBUG_SOUND_SCALE*map[sound|highpass]));
+        Serial.print("accelerometer:" + String(DEBUG_ACCEL_SCALE*data[accelAbsSum|highpass]));
+        Serial.print(",gyroscope:" + String(DEBUG_GYRO_SCALE*data[gyroAbsSum|highpass]));
+        Serial.println(",sound:" + String(DEBUG_SOUND_SCALE*data[sound|highpass]));
       }
 
       if (readyForBonk) {
-        if (map[accelAbsSum|highpass] >= accelThresholdHigh) accelCounter += 2;
-        if (map[gyroAbsSum|highpass]  >= gyroThresholdHigh)  gyroCounter  += 2;
-        if (map[sound|highpass]       >= soundThresholdHigh) soundCounter += 2;
+        if (data[accelAbsSum|highpass] >= accelThresholdHigh) accelCounter += 2;
+        if (data[gyroAbsSum|highpass]  >= gyroThresholdHigh)  gyroCounter  += 2;
+        if (data[sound|highpass]       >= soundThresholdHigh) soundCounter += 2;
   
         if (accelCounter > 0 && gyroCounter > 0 && soundCounter > 0) {
           Serial.println("Bonk!");
@@ -214,9 +218,9 @@ class Sensors : public Polls {
         }
       }
       if (!readyForBonk) {
-        if (map[accelAbsSum|bandpass] >= accelThresholdLow) accelCounter = bonkSettleLoops;
-        if (map[gyroAbsSum|bandpass]  >= gyroThresholdLow)  gyroCounter  = bonkSettleLoops;
-        if (map[sound|bandpass]       >= soundThresholdLow) soundCounter = bonkSettleLoops;
+        if (data[accelAbsSum|bandpass] >= accelThresholdLow) accelCounter = bonkSettleLoops;
+        if (data[gyroAbsSum|bandpass]  >= gyroThresholdLow)  gyroCounter  = bonkSettleLoops;
+        if (data[sound|bandpass]       >= soundThresholdLow) soundCounter = bonkSettleLoops;
 
         if (accelCounter == 0 && gyroCounter == 0 && soundCounter == 0) {
           Serial.println("Ready for bonk");
@@ -230,8 +234,8 @@ class Sensors : public Polls {
 
       //Serial.println("accel:"+String(accelCounter)+",gyro:"+String(gyroCounter)+",sound:"+String(soundCounter));
 
-      float len = sqrt(map[xAccel|bandpass] * map[xAccel|bandpass] + map[yAccel|bandpass] * map[yAccel|bandpass] + map[zAccel|bandpass] * map[zAccel|bandpass]);
-      float normalized[] = { -map[yAccel|bandpass] / len, -map[xAccel|bandpass] / len, map[zAccel|bandpass] / len };
+      float len = sqrt(data[xAccel|bandpass] * data[xAccel|bandpass] + data[yAccel|bandpass] * data[yAccel|bandpass] + data[zAccel|bandpass] * data[zAccel|bandpass]);
+      float normalized[] = { -data[yAccel|bandpass] / len, -data[xAccel|bandpass] / len, data[zAccel|bandpass] / len };
 
       // Light up according to accelerometer data
       for (int i = 0; i < 4; ++i) {
@@ -241,7 +245,7 @@ class Sensors : public Polls {
       }
 
       // Clear all accumulated readings
-      for (int i = xAccel; i <= sound; ++i) map[i|reading] = 0.0f;
+      for (int i = xAccel; i <= sound; ++i) data[i|reading] = 0.0f;
       readingCount = 0;
       soundReadingCount = 0;
 
