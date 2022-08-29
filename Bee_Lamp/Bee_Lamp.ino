@@ -72,9 +72,9 @@ class Sensors : public Polls {
   
   private:
     const float 
-      accelThresholdHigh = 1.5f / DEBUG_ACCEL_SCALE, accelThresholdLow = 0.03f / DEBUG_ACCEL_SCALE,
-      gyroThresholdHigh  = 1.5f / DEBUG_GYRO_SCALE,  gyroThresholdLow  = 0.20f / DEBUG_GYRO_SCALE,
-      soundThresholdHigh = 0.8f / DEBUG_SOUND_SCALE, soundThresholdLow = 0.01f / DEBUG_SOUND_SCALE;
+      accelThresholdHigh = 1.5f / DEBUG_ACCEL_SCALE, accelThresholdLow = 0.5f / DEBUG_ACCEL_SCALE,
+      gyroThresholdHigh  = 1.5f / DEBUG_GYRO_SCALE,  gyroThresholdLow  = 1.0f / DEBUG_GYRO_SCALE,
+      soundThresholdHigh = 0.8f / DEBUG_SOUND_SCALE, soundThresholdLow = 0.2f / DEBUG_SOUND_SCALE;
 
     bool readyForBonk = false;
     int accelCounter = 0;
@@ -82,7 +82,7 @@ class Sensors : public Polls {
     int soundCounter = 0;
 
     const float 
-      bonkGracePeriod = 0.1f, // Seconds
+      bonkGracePeriod = 0.15f, // Seconds
       bonkSettlePeriod = 0.1f;
 
     const int bonkGraceLoops, bonkSettleLoops;
@@ -97,7 +97,6 @@ class Sensors : public Polls {
     enum { 
       xAccel = 0, yAccel = 1, zAccel = 2, 
       xGyro = 3, yGyro = 4, zGyro = 5, 
-
       sound = 6,
 
       accelAbsSum = 7,
@@ -138,8 +137,8 @@ class Sensors : public Polls {
   public:
     Sensors(unsigned long updateDelay) : 
         Polls(updateDelay), 
-        bonkGraceLoops(bonkGracePeriod * 1000.0f / (float)updateDelay),
-        bonkSettleLoops(bonkSettlePeriod * 1000.0f / (float)updateDelay) {
+        bonkGraceLoops(ceil(bonkGracePeriod * 1000.0f / (float)updateDelay)),
+        bonkSettleLoops(ceil(bonkSettlePeriod * 1000.0f / (float)updateDelay)) {
           
       if (!IMU.begin()) {
         Serial.println("Failed to initialize IMU!");
@@ -194,6 +193,12 @@ class Sensors : public Polls {
 
       runFullpassAbs(sound, soundLowpassEma, soundBandpassEma);
 
+      if (false) {
+        Serial.print("accelerometer:" + String(DEBUG_ACCEL_SCALE*map[accelAbsSum|highpass]));
+        Serial.print(",gyroscope:" + String(DEBUG_GYRO_SCALE*map[gyroAbsSum|highpass]));
+        Serial.println(",sound:" + String(DEBUG_SOUND_SCALE*map[sound|highpass]));
+      }
+
       if (readyForBonk) {
         if (map[accelAbsSum|highpass] >= accelThresholdHigh) accelCounter += 2;
         if (map[gyroAbsSum|highpass]  >= gyroThresholdHigh)  gyroCounter  += 2;
@@ -223,12 +228,8 @@ class Sensors : public Polls {
       gyroCounter  = max(gyroCounter  - 1, 0);
       soundCounter = max(soundCounter - 1, 0);
 
-      if (false) {
-        Serial.print("accelerometer:" + String(DEBUG_ACCEL_SCALE*map[accelAbsSum|highpass]));
-        Serial.print(",gyroscope:" + String(DEBUG_GYRO_SCALE*map[gyroAbsSum|highpass]));
-        Serial.println(",sound:" + String(DEBUG_SOUND_SCALE*map[sound|highpass]));
-      }
-      
+      //Serial.println("accel:"+String(accelCounter)+",gyro:"+String(gyroCounter)+",sound:"+String(soundCounter));
+
       float len = sqrt(map[xAccel|bandpass] * map[xAccel|bandpass] + map[yAccel|bandpass] * map[yAccel|bandpass] + map[zAccel|bandpass] * map[zAccel|bandpass]);
       float normalized[] = { -map[yAccel|bandpass] / len, -map[xAccel|bandpass] / len, map[zAccel|bandpass] / len };
 
