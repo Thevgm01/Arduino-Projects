@@ -20,7 +20,11 @@ int sign(T val) {
 }
 
 float map(float value, float istart, float istop, float ostart, float ostop) {
-    return ostart + (ostop - ostart) * ((value - istart) / (istop - istart));
+  return ostart + (ostop - ostart) * ((value - istart) / (istop - istart));
+}
+
+float random(float min, float max) {
+  return (random(2000000000) / 2000000000.0f) * (max - min) + min;
 }
 
 static constexpr float NORMALIZED_WIDTH = 1.0f/sqrt(2);//2.0f/sqrt(13);
@@ -99,6 +103,21 @@ class Lights : public Polls {
         }
     };
 
+    class Flicker : public LightPattern {
+      private:
+        const float speed = 0.04f ;
+        float values[4];
+
+      public:
+        void update(float in[4]) override {
+          for (int i = 0; i < 4; ++i) {
+            values[i] += random(-1.0f, 1.0f) * speed;
+            values[i] = constrain(values[i], 0.6f, 1.0f);
+            in[i] = values[i];
+          }
+        }
+    };
+
     LightPattern* pattern;
 
   public:
@@ -127,7 +146,7 @@ class Lights : public Polls {
     }
 
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      pattern = new Breathe();
+      pattern = new Flicker();
     }
 
     bool update() override {      
