@@ -15,7 +15,13 @@
 // 2*2+3*3=4+9=13
 
 template<typename T>
-int sign(T val) { return (T(0) < val) - (val < T(0)); }
+int sign(T val) { 
+  return (T(0) < val) - (val < T(0));
+}
+
+float map(float value, float istart, float istop, float ostart, float ostop) {
+    return ostart + (ostop - ostart) * ((value - istart) / (istop - istart));
+}
 
 static constexpr float NORMALIZED_WIDTH = 1.0f/sqrt(2);//2.0f/sqrt(13);
 static constexpr float NORMALIZED_LENGTH = 1.0f/sqrt(2);//3.0f/sqrt(13);
@@ -44,10 +50,40 @@ class Lights : public Polls {
     }
 
     bool toggleState = false;
-    float brightness[4];
     float brightnessModifiers[4];
 
     bool hasChanged = false;
+
+    class LightPattern {
+      public:
+        virtual void update(float in[4]) = 0;
+    };
+
+    class Lighthouse : public LightPattern {
+      private:
+        const float speeds[2] = { 0.03f, 0.01f };
+
+        static constexpr byte NUM_LIGHTS = 1;
+        float positions[NUM_LIGHTS];
+
+      public:
+        void update(float in[4]) override {
+          for (int i = 0; i < NUM_LIGHTS; ++i) {
+            positions[i] += speeds[i];
+            if (positions[i] >= TWO_PI) positions[i] -= TWO_PI;
+          }
+          for (int i = 0; i < 4; ++i) {
+            float average = 0.0f;
+            for (int j = 0; j < NUM_LIGHTS; ++j) {
+              average += cos(positions[j] + i*PI/2);
+            }
+            average /= NUM_LIGHTS;
+            in[i] = map(average, -1, 1, 0.2f, 1.0f);
+          }
+        }
+    };
+
+    LightPattern* pattern;
 
   public:
 
@@ -63,14 +99,7 @@ class Lights : public Polls {
     bool getToggleState() { return toggleState; }
 
     void toggle() {
-      if (toggleState) {
-        toggleState = false;
-        for (int i = 0; i < 4; ++i) brightness[i] = 0.0f;
-      }
-      else {
-        toggleState = true;
-        for (int i = 0; i < 4; ++i) brightness[i] = 1.0f;
-      }
+      toggleState = !toggleState;
       hasChanged = true;
     }
 
@@ -82,19 +111,22 @@ class Lights : public Polls {
     }
 
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      
+      pattern = new Lighthouse();
     }
 
     bool update() override {      
       if (!Polls::update()) return false;
 
-      if (!hasChanged) return false;
+      //if (!hasChanged) return false;
+
+      float brightness[4];
+      if (toggleState) {
+        pattern->update(brightness);
+      }
 
       for (int i = 0; i < 4; ++i) {
         logarithmicWrite(i, brightness[i] + brightnessModifiers[i]);
       }
-
-      Serial.println(String(brightness[0]) + ", " + String(brightnessModifiers[0]));
 
       return true;
     }
