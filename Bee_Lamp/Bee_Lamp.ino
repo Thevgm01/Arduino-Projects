@@ -83,6 +83,22 @@ class Lights : public Polls {
         }
     };
 
+    class Breathe : public LightPattern {
+      private:
+        const float speed = 0.02f ;
+        float position = 0.0f;
+
+      public:
+        void update(float in[4]) override {
+          position += speed;
+          if (position >= TWO_PI) position -= TWO_PI;
+
+          for (int i = 0; i < 4; ++i) {
+            in[i] = map(cos(position), -1, 1, 0.6f, 1.0f);
+          }
+        }
+    };
+
     LightPattern* pattern;
 
   public:
@@ -111,7 +127,7 @@ class Lights : public Polls {
     }
 
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      pattern = new Lighthouse();
+      pattern = new Breathe();
     }
 
     bool update() override {      
