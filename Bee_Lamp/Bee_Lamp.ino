@@ -27,50 +27,88 @@ static constexpr float
   DEBUG_ACCEL_SCALE = 25.0f,
   DEBUG_GYRO_SCALE  = 1.5f,
   DEBUG_SOUND_SCALE = 10.0f;
-            
-enum { 
-  BACK_RIGHT  = 0, 
-  FRONT_RIGHT = 1, 
-  FRONT_LEFT  = 2, 
-  BACK_LEFT   = 3 
+
+class Lights : public Polls {
+  private:
+    static constexpr int MAX_BRIGHTNESS = ANALOG_MAX;
+
+    const byte LED_PINS[4] = { 
+      D2, // BACK_RIGHT
+      D3, // FRONT_RIGHT
+      D4, // FRONT_LEFT
+      D5  // BACK_LEFT
+    };
+  
+    void logarithmicWrite(int pin, float brightness) {
+      analogWrite(LED_PINS[pin], pow(brightness, 3) * MAX_BRIGHTNESS);
+    }
+
+    bool toggleState = false;
+    float brightness[4];
+    float brightnessModifiers[4];
+
+    bool hasChanged = false;
+
+  public:
+
+    const float LED_COORDS[4][2] = { 
+      {  NORMALIZED_WIDTH, -NORMALIZED_LENGTH }, // BACK_RIGHT
+      {  NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_RIGHT
+      { -NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_LEFT
+      { -NORMALIZED_WIDTH, -NORMALIZED_LENGTH }  // BACK_LEFT
+    };
+
+    float getMaxBrightness() { return MAX_BRIGHTNESS; }
+
+    bool getToggleState() { return toggleState; }
+
+    void toggle() {
+      if (toggleState) {
+        toggleState = false;
+        for (int i = 0; i < 4; ++i) brightness[i] = 0.0f;
+      }
+      else {
+        toggleState = true;
+        for (int i = 0; i < 4; ++i) brightness[i] = 1.0f;
+      }
+      hasChanged = true;
+    }
+
+    void setAccelModifier(int index, float value) {
+      if (brightnessModifiers[index] != value) {
+        brightnessModifiers[index] = value;
+        hasChanged = true;
+      }
+    }
+
+    Lights(unsigned long updateDelay) : Polls(updateDelay) {
+      
+    }
+
+    bool update() override {      
+      if (!Polls::update()) return false;
+
+      if (!hasChanged) return false;
+
+      for (int i = 0; i < 4; ++i) {
+        logarithmicWrite(i, brightness[i] + brightnessModifiers[i]);
+      }
+
+      Serial.println(String(brightness[0]) + ", " + String(brightnessModifiers[0]));
+
+      return true;
+    }
 };
 
-static constexpr byte LED_PINS[] = { 
-  D2, 
-  D3, 
-  D4, 
-  D5 
-};
-
-static constexpr byte AUDIO_PIN = A6;
-
-static constexpr float LED_COORDS[4][2] = { 
-  {  NORMALIZED_WIDTH, -NORMALIZED_LENGTH }, // BACK_RIGHT
-  {  NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_RIGHT
-  { -NORMALIZED_WIDTH,  NORMALIZED_LENGTH }, // FRONT_LEFT
-  { -NORMALIZED_WIDTH, -NORMALIZED_LENGTH }  // BACK_LEFT
-};
-
-void logarithmicWrite(int pin, float brightness) {
-  analogWrite(pin, pow(brightness, 3) * ANALOG_MAX);
-}
-
-void writeToAllPins(int br, int fr, int fl, int bl) {
-  analogWrite(LED_PINS[BACK_RIGHT],  br);
-  analogWrite(LED_PINS[FRONT_RIGHT], fr);
-  analogWrite(LED_PINS[FRONT_LEFT],  fl);
-  analogWrite(LED_PINS[BACK_LEFT],   bl);
-}
-
-void writeToAllPins(int brightness) {
-  writeToAllPins(brightness, brightness, brightness, brightness);
-}
+Lights* lights;
 
 class Sensors : public Polls {
   // If the highpass detects that all 3 sensors have hit their bonk threshold, toggle the light
   // Then, wait until all three bandpasses have returned to under a different threshold for a period of time before allowing another bonk
   
   private:
+    static constexpr byte AUDIO_PIN = A6;
+  
     static constexpr float 
       accelThresholdHigh = 1.5f / DEBUG_ACCEL_SCALE, accelThresholdLow = 0.5f / DEBUG_ACCEL_SCALE,
       gyroThresholdHigh  = 1.5f / DEBUG_GYRO_SCALE,  gyroThresholdLow  = 1.0f / DEBUG_GYRO_SCALE,
@@ -210,6 +248,7 @@ class Sensors : public Polls {
   
         if (accelCounter > 0 && gyroCounter > 0 && soundCounter > 0) {
           Serial.println("Bonk!");
+          lights->toggle();
           readyForBonk = false;
         }
         else if (accelCounter > bonkGraceLoops || gyroCounter > bonkGraceLoops || soundCounter > bonkGraceLoops) {
@@ -227,7 +266,6 @@ class Sensors : public Polls {
           readyForBonk = true;
         }
       }
-
       accelCounter = max(accelCounter - 1, 0);
       gyroCounter  = max(gyroCounter  - 1, 0);
       soundCounter = max(soundCounter - 1, 0);
@@ -239,9 +277,9 @@ class Sensors : public Polls {
 
       // Light up according to accelerometer data
       for (int i = 0; i < 4; ++i) {
-        //          X                                  Y                                  Z
-        float dot = LED_COORDS[i][0] * normalized[0] + LED_COORDS[i][1] * normalized[1] + abs(normalized[2]) / 2.0f;
-        logarithmicWrite(LED_PINS[i], dot * len);
+        //          X                                          Y                                          Z
+        float dot = lights->LED_COORDS[i][0] * normalized[0] + lights->LED_COORDS[i][1] * normalized[1] + abs(normalized[2]) / 1.5f;
+        lights->setAccelModifier(i, (dot * len * 2 - len) * (lights->getToggleState() ? 4 : 2));
       }
 
       // Clear all accumulated readings
@@ -264,6 +302,7 @@ void setup() {
   randomSeed(analogRead(A5));
 
   sensors = new Sensors(16);
+  lights = new Lights(10);
 }
 
 void loop() {
@@ -272,4 +311,5 @@ void loop() {
     sensors->read();
 
     sensors->update();
+    lights->update();
 }
