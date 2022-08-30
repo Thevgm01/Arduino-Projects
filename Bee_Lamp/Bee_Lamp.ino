@@ -118,6 +118,22 @@ class Lights : public Polls {
         }
     };
 
+    class Wave : public LightPattern {
+      private:
+        const float speed = 0.03f ;
+        float position = 0.0f;
+        byte offset = 1;
+
+      public:
+        void update(float in[4]) override {
+          position += speed;
+          if (position >= TWO_PI) position -= TWO_PI;
+          for (int i = 0; i < 4; ++i) {
+            in[(i + offset) % 4] = map(cos(position + floor(i/2.0f) * PI), -1, 1, 0.4f, 1.0f);
+          }
+        }
+    };
+    
     LightPattern* pattern;
 
   public:
@@ -146,7 +162,7 @@ class Lights : public Polls {
     }
 
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      pattern = new Flicker();
+      pattern = new Wave();
     }
 
     bool update() override {      
