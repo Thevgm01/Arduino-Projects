@@ -154,6 +154,26 @@ class Lights : public Polls {
           }
         }
     };
+    class Crosswave : public LightPattern {
+      private:
+        static constexpr int NUM_WAVES = 2;
+        const float speeds[NUM_WAVES] = { sqrt(3) * 0.02f, sqrt(2) * 0.02f };
+        float positions[NUM_WAVES];
+        const byte offset = 1;
+
+      public:      
+        void update(float in[4]) override {
+          for (int i = 0; i < NUM_WAVES; ++i) {
+            positions[i] += speeds[i] * speedMult;
+            if (positions[i] >= TWO_PI) positions[i] -= TWO_PI;
+          }
+          for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < NUM_WAVES; ++j) {
+              in[(i + j) % 4] += map(cos(positions[j] + floor(i/2.0f) * PI), -1, 1, 0.4f, 1.0f) / NUM_WAVES;
+            }
+          }
+        }
+    };
     
     LightPattern* pattern;
 
@@ -190,6 +210,7 @@ class Lights : public Polls {
         case 6:  pattern = new Pulse(3);       break; // Pulse (front to back)
         case 7:  pattern = new Lighthouse(1);  break; // Lighthouse (clockwise)
         case 8:  pattern = new Lighthouse(-1); break; // Lighthouse (counter-clockwise)
+        case 9:  pattern = new Crosswave();    break; // Crosswave
         default: pattern = new Static();       break; // Static
       }
     }
