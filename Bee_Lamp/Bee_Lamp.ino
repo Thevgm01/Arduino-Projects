@@ -458,7 +458,10 @@ class Bluetooth : public Polls {
       BLE.poll();
     
       if (toggleCharacteristic.written()) {
-        lights->toggle();
+        if (toggleCharacteristic.value() > 0 && !lights->getToggleState() ||
+            toggleCharacteristic.value() == 0 && lights->getToggleState()) {
+          lights->toggle();
+        }
       }
     
       if (maxBrightnessCharacteristic.written()) {
