@@ -40,7 +40,7 @@ static constexpr float
 
 class Lights : public Polls {
   private:
-    static constexpr int MAX_BRIGHTNESS = ANALOG_MAX;
+    int maxBrightness = ANALOG_MAX;
 
     const byte LED_PINS[4] = { 
       D2, // BACK_RIGHT
@@ -50,51 +50,50 @@ class Lights : public Polls {
     };
   
     void logarithmicWrite(int pin, float brightness) {
-      analogWrite(LED_PINS[pin], pow(brightness, 3) * MAX_BRIGHTNESS);
+      analogWrite(LED_PINS[pin], pow(brightness, 3) * maxBrightness);
     }
 
     bool toggleState = false;
     float brightnessModifiers[4];
 
-    bool hasChanged = false;
-
     class LightPattern {
       public:
+        float speedMult = 1.0f;
         virtual void update(float in[4]) = 0;
     };
-
-    class Lighthouse : public LightPattern {
-      private:
-        const float speeds[2] = { 0.03f, 0.01f };
-
-        static constexpr byte NUM_LIGHTS = 1;
-        float positions[NUM_LIGHTS];
-
+    class Static : public LightPattern {
       public:
         void update(float in[4]) override {
-          for (int i = 0; i < NUM_LIGHTS; ++i) {
-            positions[i] += speeds[i];
-            if (positions[i] >= TWO_PI) positions[i] -= TWO_PI;
-          }
           for (int i = 0; i < 4; ++i) {
-            float average = 0.0f;
-            for (int j = 0; j < NUM_LIGHTS; ++j) {
-              average += cos(positions[j] + i*PI/2);
-            }
-            average /= NUM_LIGHTS;
-            in[i] = map(average, -1, 1, 0.2f, 1.0f);
+            in[i] = 1.0f;
           }
         }
     };
+    class Lighthouse : public LightPattern {
+      private:
+        const float speed = 0.03f;
+        float position;
+        float direction = 1;
 
+      public:
+        Lighthouse(float direction) : direction(direction) {}
+      
+        void update(float in[4]) override {
+          position += speed * speedMult;
+          if (position >= TWO_PI) position -= TWO_PI;
+          for (int i = 0; i < 4; ++i) {
+            in[i] = map(cos(position * direction + i*PI/2), -1, 1, 0.2f, 1.0f);
+          }
+        }
+    };
     class Breathe : public LightPattern {
       private:
-        const float speed = 0.02f ;
+        const float speed = 0.02f;
         float position = 0.0f;
 
       public:
         void update(float in[4]) override {
-          position += speed;
+          position += speed * speedMult;
           if (position >= TWO_PI) position -= TWO_PI;
 
           for (int i = 0; i < 4; ++i) {
@@ -102,7 +101,6 @@ class Lights : public Polls {
           }
         }
     };
-
     class Flicker : public LightPattern {
       private:
         const float speed = 0.04f ;
@@ -117,33 +115,35 @@ class Lights : public Polls {
           }
         }
     };
-
     class Wave : public LightPattern {
       private:
-        const float speed = 0.03f ;
+        const float speed = 0.03f;
         float position = 0.0f;
-        byte offset = 1;
+        const byte offset = 1;
 
       public:
+        Wave(byte offset) : offset(offset) {}
+      
         void update(float in[4]) override {
-          position += speed;
+          position += speed * speedMult;
           if (position >= TWO_PI) position -= TWO_PI;
           for (int i = 0; i < 4; ++i) {
             in[(i + offset) % 4] = map(cos(position + floor(i/2.0f) * PI), -1, 1, 0.4f, 1.0f);
           }
         }
     };
-
     class Pulse : public LightPattern {
       private:
         const float speed = 0.04f ;
         float positions[2] = { 0.0f, PI/3.0f };
-        byte offset = 1;
+        const byte offset = 1;
 
       public:
+        Pulse(byte offset) : offset(offset) {}
+      
         void update(float in[4]) override {
           for (int i = 0; i < 2; ++i) {
-            positions[i] += speed;
+            positions[i] += speed * speedMult;
             if (positions[i] >= PI * 1.5f) positions[i] -= PI * 1.5f;
           }
           for (int i = 0; i < 4; ++i) {
@@ -163,30 +163,48 @@ class Lights : public Polls {
       { -NORMALIZED_WIDTH, -NORMALIZED_LENGTH }  // BACK_LEFT
     };
 
-    float getMaxBrightness() { return MAX_BRIGHTNESS; }
+    float getMaxBrightness() { return maxBrightness; }
+
+    void setMaxBrightness(int max) {
+      maxBrightness = max;
+    }
 
     bool getToggleState() { return toggleState; }
 
     void toggle() {
       toggleState = !toggleState;
-      hasChanged = true;
     }
 
-    void setAccelModifier(int index, float value) {
-      if (brightnessModifiers[index] != value) {
-        brightnessModifiers[index] = value;
-        hasChanged = true;
+    void setPattern(byte num) {
+      delete pattern;
+      switch (num) {
+      //case 0:  pattern = new Static();       break; // Static (handled by default)
+        case 1:  pattern = new Breathe();      break; // Breathe
+        case 2:  pattern = new Flicker();      break; // Flicker
+        case 3:  pattern = new Wave(1);        break; // Wave (forward/backward)
+        case 4:  pattern = new Wave(0);        break; // Wave (left/right)
+        case 5:  pattern = new Pulse(1);       break; // Pulse (back to front)
+        case 6:  pattern = new Pulse(3);       break; // Pulse (front to back)
+        case 7:  pattern = new Lighthouse(1);  break; // Lighthouse (clockwise)
+        case 8:  pattern = new Lighthouse(-1); break; // Lighthouse (counter-clockwise)
+        default: pattern = new Static();       break; // Static
       }
     }
 
+    void setSpeed(byte speed) {
+      pattern->speedMult = speed / 32.0f;
+    }
+
+    void setAccelModifier(int index, float value) {
+      brightnessModifiers[index] = value;
+    }
+
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      pattern = new Pulse();
+      pattern = new Static();
     }
 
     bool update() override {      
       if (!Polls::update()) return false;
-
-      //if (!hasChanged) return false;
 
       float brightness[4];
       if (toggleState) {
@@ -285,10 +303,10 @@ class Sensors : public Polls {
           
       if (!IMU.begin()) {
         Serial.println("Failed to initialize IMU!");
+        return;
       }
       
       pinMode(AUDIO_PIN, INPUT);
-      
     }
 
     void read() {
@@ -394,6 +412,74 @@ class Sensors : public Polls {
 
 Sensors* sensors;
 
+BLEService LEDService("7b736c0d-6f4b-41f1-85c4-32cc78edca05");
+
+BLEByteCharacteristic toggleCharacteristic("1f00", BLEWrite);
+BLEIntCharacteristic maxBrightnessCharacteristic("1f01", BLEWrite);
+BLEByteCharacteristic patternCharacteristic("1f02", BLEWrite);
+BLEByteCharacteristic patternSpeedCharacteristic("1f03", BLEWrite);
+
+class Bluetooth : public Polls {
+  public:
+    Bluetooth(unsigned long updateDelay) : Polls(updateDelay) {
+      if (!BLE.begin()) {
+        Serial.println("Starting BLE failed!");
+        return;
+      }
+    
+      // Set advertised local name and service UUID:
+      BLE.setLocalName("Bee-LED-BLE");
+      BLE.setAdvertisedService(LEDService);
+    
+      // Add the characteristics to the service
+      LEDService.addCharacteristic(toggleCharacteristic);
+      LEDService.addCharacteristic(maxBrightnessCharacteristic);
+      LEDService.addCharacteristic(patternCharacteristic);
+      LEDService.addCharacteristic(patternSpeedCharacteristic);
+    
+      // Add service
+      BLE.addService(LEDService);
+    
+      // Set the initial value for the characeristic:
+      //toggleCharacteristic.writeValue(0);
+      //timerCharacteristic.writeValue(0);
+      //morseCharacteristic.writeValue("");
+    
+      // Start advertising
+      BLE.advertise();
+  
+      //Serial.println("Bluetooth device active, waiting for connections...");
+    }
+    
+    bool update() override {
+      if (!Polls::update()) return false;
+      
+      // Poll for BLE events
+      BLE.poll();
+    
+      if (toggleCharacteristic.written()) {
+        lights->toggle();
+      }
+    
+      if (maxBrightnessCharacteristic.written()) {
+        lights->setMaxBrightness(maxBrightnessCharacteristic.value());
+        if (!lights->getToggleState()) {
+          lights->toggle();
+        }
+      }
+    
+      if (patternCharacteristic.written()) {
+        lights->setPattern(patternCharacteristic.value());
+      }
+    
+      if (patternSpeedCharacteristic.written()) {
+        lights->setSpeed(patternSpeedCharacteristic.value());
+      }
+    }
+};
+
+Bluetooth* bluetooth;
+
 void setup() {
   analogWriteResolution(12);
   analogReadResolution(12);
@@ -404,6 +490,7 @@ void setup() {
 
   sensors = new Sensors(16);
   lights = new Lights(10);
+  bluetooth = new Bluetooth(200);
 }
 
 void loop() {
@@ -413,4 +500,5 @@ void loop() {
 
     sensors->update();
     lights->update();
+    bluetooth->update();
 }
