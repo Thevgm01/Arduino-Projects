@@ -487,21 +487,22 @@ class Bluetooth : public Polls {
           lights->toggle();
         }
       }
-    
+      #define TURN_ON if (!lights->getToggleState()) lights->toggle()
       if (maxBrightnessCharacteristic.written()) {
         lights->setMaxBrightness(maxBrightnessCharacteristic.value());
-        if (!lights->getToggleState()) {
-          lights->toggle();
-        }
+        TURN_ON;
       }
     
       if (patternCharacteristic.written()) {
         lights->setPattern(patternCharacteristic.value());
+        TURN_ON;
       }
     
       if (patternSpeedCharacteristic.written()) {
         lights->setSpeed(patternSpeedCharacteristic.value());
+        TURN_ON;
       }
+      #undef TURN_ON
     }
 };
 
