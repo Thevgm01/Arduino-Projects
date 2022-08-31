@@ -133,6 +133,24 @@ class Lights : public Polls {
           }
         }
     };
+
+    class Pulse : public LightPattern {
+      private:
+        const float speed = 0.04f ;
+        float positions[2] = { 0.0f, PI/3.0f };
+        byte offset = 1;
+
+      public:
+        void update(float in[4]) override {
+          for (int i = 0; i < 2; ++i) {
+            positions[i] += speed;
+            if (positions[i] >= PI * 1.5f) positions[i] -= PI * 1.5f;
+          }
+          for (int i = 0; i < 4; ++i) {
+            in[(i + offset) % 4] = max(sin(positions[i/2]), 0) * 0.3f + 0.7f;
+          }
+        }
+    };
     
     LightPattern* pattern;
 
@@ -162,7 +180,7 @@ class Lights : public Polls {
     }
 
     Lights(unsigned long updateDelay) : Polls(updateDelay) {
-      pattern = new Wave();
+      pattern = new Pulse();
     }
 
     bool update() override {      
