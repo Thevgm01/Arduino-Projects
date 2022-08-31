@@ -103,14 +103,17 @@ class Lights : public Polls {
     };
     class Flicker : public LightPattern {
       private:
-        const float speed = 0.04f ;
+        const float maxSpeedChange = 0.01f ;
+        const float maxSpeed = 0.015f;
         float values[4];
+        float speeds[4];
 
       public:
         void update(float in[4]) override {
           for (int i = 0; i < 4; ++i) {
-            values[i] += random(-1.0f, 1.0f) * speed;
-            values[i] = constrain(values[i], 0.6f, 1.0f);
+            values[i] = constrain(values[i] + speeds[i], 0.6f, 1.0f);
+            float delta = random(-1.0f, 1.0f) * maxSpeedChange * speedMult;
+            speeds[i] = constrain(speeds[i] + delta, -maxSpeed * speedMult, maxSpeed * speedMult);
             in[i] = values[i];
           }
         }
