@@ -54,7 +54,7 @@ class Lights : public Polls {
     }
 
     bool toggleState = false;
-    float brightnessModifiers[4];
+    float brightnessModifiers[4] = { 0, 0, 0, 0 };
 
     class LightPattern {
       public:
@@ -105,8 +105,8 @@ class Lights : public Polls {
       private:
         const float maxSpeedChange = 0.01f ;
         const float maxSpeed = 0.015f;
-        float values[4];
-        float speeds[4];
+        float values[4] = { 0, 0, 0, 0 };
+        float speeds[4] = { 0, 0, 0, 0 };
 
       public:
         void update(float in[4]) override {
@@ -158,7 +158,7 @@ class Lights : public Polls {
       private:
         static constexpr int NUM_WAVES = 2;
         const float speeds[NUM_WAVES] = { sqrt(3) * 0.02f, sqrt(2) * 0.02f };
-        float positions[NUM_WAVES];
+        float positions[NUM_WAVES] = { 0, 0 };
         const byte offset = 1;
 
       public:      
@@ -230,7 +230,7 @@ class Lights : public Polls {
     bool update() override {      
       if (!Polls::update()) return false;
 
-      float brightness[4];
+      float brightness[4] = { 0, 0, 0, 0 };
       if (toggleState) {
         pattern->update(brightness);
       }
