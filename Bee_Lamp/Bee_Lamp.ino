@@ -422,7 +422,11 @@ class Sensors : public Polls {
       for (int i = 0; i < 4; ++i) {
         //          X                                          Y                                          Z
         float dot = lights->LED_COORDS[i][0] * normalized[0] + lights->LED_COORDS[i][1] * normalized[1] + abs(normalized[2]) / 1.5f;
-        lights->setAccelModifier(i, (dot * len * 2 - len) * (lights->getToggleState() ? 4 : 2));
+        float brightness = dot * len;
+        if (abs(brightness) > 0.01f) {
+          Serial.println("hello");
+          lights->setAccelModifier(i, (brightness * 2 - len) * (lights->getToggleState() ? 4 : 2));
+        }
       }
 
       // Clear all accumulated readings
